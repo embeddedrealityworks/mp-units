@@ -1,0 +1,6 @@
+option('mp_units_build_cxx_modules', type: 'boolean', value: false, description: 'Add c++ modules to the list of default targets')
+option('mp_units_build_install', type: 'boolean', value: true, description: 'Install the library')
+option('mp_units_api_std_format', type: 'boolean', value: true, description: 'Enable std::format support')
+option('mp_units_api_no_crtp', type: 'boolean', value: false, description: 'Enable class definitions without CRTP idiom')
+option('mp_units_api_throwing_constraints', type: 'boolean', value: false, description: 'Enable throwing constraints')
+option('mp_units_api_freestanding', type: 'boolean', value: false, description: 'Builds only freestanding part of the library')
