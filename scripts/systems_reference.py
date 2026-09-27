@@ -69,6 +69,11 @@ class Unit:
     name: str
     symbol: str
     unit_symbols: list = None  # List of unit_symbol names (e.g., ['Ω', 'ohm'])
+    # Prefixed unit_symbol entries, as (exponent, prefix, symbol, essential).
+    # Coverage is deliberately not uniform - most units carry symbols for only
+    # some prefixes - so listing them is the only way a reader can tell which
+    # combinations exist.
+    prefixed_symbols: list = None
     definition: str = ""
     namespace: str = ""  # Full namespace path (e.g., "mp_units::usc::survey1893")
     file: str = ""
@@ -88,6 +93,8 @@ class Unit:
     def __post_init__(self):
         if self.unit_symbols is None:
             self.unit_symbols = []
+        if self.prefixed_symbols is None:
+            self.prefixed_symbols = []
 
 
 @dataclass
@@ -211,6 +218,10 @@ class SystemInfo:
     imported_systems: Set[str] = field(
         default_factory=set
     )  # Track systems imported via using declarations (e.g., {"si"})
+    # SI splits its unit symbols across a cheap header and a complete one; both
+    # are recorded so the reference can say which include a symbol needs.
+    essential_symbols_header: Optional[str] = None
+    full_symbols_header: Optional[str] = None
 
 
 class SystemsParser:
@@ -393,7 +404,7 @@ class SystemsParser:
                     self._parse_constants(content, core_system, str(unit_path))
                     self._parse_aliases(content, core_system, str(unit_path))
                     # Parse unit_symbols after constants so constants can be matched
-                    self._parse_unit_symbols(content, core_system)
+                    self._parse_unit_symbols(content, core_system, str(unit_path))
             except Exception as e:
                 print(f"Warning: Could not parse {unit_path}: {e}")
         # Users include core.h, never the framework component the definitions were read from
@@ -490,7 +501,7 @@ class SystemsParser:
         self._parse_using_declarations(content, system, str(header_file))
         self._parse_using_namespace_directives(content, system, str(header_file))
         # Parse unit_symbols after inline namespace detection so it can match correctly
-        self._parse_unit_symbols(content, system)
+        self._parse_unit_symbols(content, system, str(header_file))
 
     def _detect_inline_subnamespaces(self, content: str, system: SystemInfo):
         """Detect and store inline subnamespaces"""
@@ -1719,15 +1730,68 @@ class SystemsParser:
                 )
                 system.units.append(alias_unit)
 
-    def _parse_unit_symbols(self, content: str, system: SystemInfo):
+    def _prefix_order(self, system: SystemInfo, prefix_name: str) -> tuple:
+        """Sort key for a prefix: its ladder, then its power.
+
+        Alphabetical order would interleave `atto` with `exa`; a reader scanning
+        for the prefix they want expects the SI ladder. The binary prefixes are
+        a second ladder rather than points on the first one, so they follow the
+        decimal ones instead of being interleaved by magnitude.
+        """
+        # A system often prefixes with another system's prefixes - IEC uses the
+        # SI ones - so fall back to searching every system rather than only
+        # this one, where the lookup would fail and everything would sort
+        # alphabetically.
+        candidates = list(system.prefixes) + [
+            prefix
+            for other in self.systems.values()
+            if other is not system
+            for prefix in other.prefixes
+        ]
+        for prefix in candidates:
+            if prefix.name != prefix_name:
+                continue
+            match = re.search(
+                r"mag_power<\s*(\d+)\s*,\s*(-?\d+)\s*>", prefix.definition
+            )
+            if match:
+                base, exponent = int(match.group(1)), int(match.group(2))
+                return (1 if base == 2 else 0, exponent)
+        return (0, 0)
+
+    def _parse_unit_symbols(
+        self, content: str, system: SystemInfo, header_file: str = ""
+    ):
         """Parse unit_symbols namespace for short aliases and using declarations"""
         # Find ALL unit_symbols namespace blocks (there can be multiple)
         # Pattern matches: inline constexpr auto NAME = UNIT_REF;
         # But NOT compound expressions like: inline constexpr auto mph = mile / si::hour;
         # Allow qualified names like si::ohm
         symbol_pattern = r"inline\s+constexpr\s+auto\s+(\w+)\s*=\s*([\w:]+)\s*;"
+        # A prefixed symbol: `inline constexpr auto qm = quecto<metre>;`. The
+        # plain pattern above cannot match these, so they used to be dropped.
+        prefixed_pattern = (
+            r"inline\s+constexpr\s+auto\s+(\w+)\s*=\s*([\w:]+)\s*<\s*([\w:]+)\s*>\s*;"
+        )
         # Pattern for using declarations: using namespace::name;
         using_pattern = r"using\s+([\w:]+)\s*;"
+
+        # SI splits its symbols across two headers: the common ones, and the
+        # rest. Which header a symbol came from is what tells a reader whether
+        # the cheaper include is enough.
+        essential = "essential" in Path(header_file).name
+        if header_file and "unit_symbols" in Path(header_file).name:
+            include = (
+                "mp-units/systems/"
+                + Path(header_file)
+                .resolve()
+                .relative_to(self.systems_dir.resolve())
+                .as_posix()
+            )
+            if essential:
+                system.essential_symbols_header = include
+            else:
+                system.full_symbols_header = include
 
         for unit_symbols_match in re.finditer(
             r"namespace\s+(?:[\w:]+::)?unit_symbols\s*\{(.*?)\}", content, re.DOTALL
@@ -1765,6 +1829,24 @@ class SystemsParser:
                                 if symbol_name not in constant.unit_symbols:
                                     constant.unit_symbols.append(symbol_name)
                                 break  # Only match the first eligible constant
+
+            # Parse prefixed assignments
+            for match in re.finditer(prefixed_pattern, symbols_content):
+                symbol_name = match.group(1)
+                prefix_name = match.group(2).split("::")[-1]
+                unit_name = match.group(3).split("::")[-1]
+                for unit in system.units:
+                    if unit.name != unit_name:
+                        continue
+                    entry = (
+                        self._prefix_order(system, prefix_name),
+                        prefix_name,
+                        symbol_name,
+                        essential,
+                    )
+                    if entry not in unit.prefixed_symbols:
+                        unit.prefixed_symbols.append(entry)
+                    break
 
             # Parse using declarations (e.g., using si::unit_symbols::cm;)
             for match in re.finditer(using_pattern, symbols_content):
@@ -3276,6 +3358,13 @@ class DocumentationGenerator:
                     )
                     need_separator = True
 
+                # Prefixed unit symbols
+                if any(unit.prefixed_symbols for unit in system.units):
+                    if need_separator:
+                        f.write("\n")
+                    self._write_prefixed_symbols(f, system)
+                    need_separator = True
+
                 # Constants
                 if system.constants:
                     if need_separator:
@@ -3468,6 +3557,90 @@ class DocumentationGenerator:
                             )
                     # Note: Last section, no need_separator update needed
 
+    @staticmethod
+    def _unit_anchor_prefix(unit: Unit) -> str | None:
+        """Sub-namespace an anchor for `unit` is qualified with, or `None`.
+
+        Every place that emits or resolves a unit anchor has to agree on this, or a
+        reference points at an anchor no page defines.
+        """
+        if unit.subnamespace and unit.is_alias:
+            # Imported unit in a subnamespace - the sub-namespace declaring it here is
+            # the one the row is anchored under, not the one it was imported from.
+            return unit.subnamespace
+        if unit.origin_namespace:
+            # Extract subnamespace from origin_namespace (e.g., "mp_units::si::si2019" -> "si2019")
+            parts = unit.origin_namespace.replace("mp_units::", "").split("::")
+            if len(parts) > 1:  # Has a subnamespace
+                return parts[-1]  # Last component is the subnamespace
+            return None
+        return unit.subnamespace
+
+    @classmethod
+    def _unit_anchor(cls, unit: Unit) -> str:
+        """Anchor ID of `unit` on the page of the system declaring it"""
+        subns_prefix = cls._unit_anchor_prefix(unit)
+        return f"{subns_prefix}-{unit.name}" if subns_prefix else unit.name
+
+    def _write_prefixed_symbols(self, f, system: SystemInfo):
+        """List each unit's prefixed symbols, and say which header carries them.
+
+        Prefix coverage is not uniform, and nothing else in the documentation
+        says so: a reader who assumes every unit takes every prefix writes
+        `si::unit_symbols::Qcd` and finds out at compile time.
+        """
+        units = sorted(
+            (unit for unit in system.units if unit.prefixed_symbols),
+            key=lambda unit: unit.name,
+        )
+        split = any(
+            not essential
+            for unit in units
+            for _, _, _, essential in unit.prefixed_symbols
+        ) and any(
+            essential for unit in units for _, _, _, essential in unit.prefixed_symbols
+        )
+
+        f.write("## Prefixed unit symbols\n\n")
+        f.write(
+            "Not every unit has a symbol for every prefix. A combination that is\n"
+            "not listed here does not exist, however reasonable it looks.\n\n"
+        )
+
+        if split:
+            f.write("| Unit | Essential header | Full header adds |\n")
+            f.write("|------|------------------|------------------|\n")
+        else:
+            f.write("| Unit | Prefixed symbols |\n")
+            f.write("|------|------------------|\n")
+
+        for unit in units:
+            entries = sorted(unit.prefixed_symbols)
+            essential = " ".join(
+                f"`{symbol}`" for _, _, symbol, is_essential in entries if is_essential
+            )
+            extra = " ".join(
+                f"`{symbol}`"
+                for _, _, symbol, is_essential in entries
+                if not is_essential
+            )
+            link = f'<a href="#{self._unit_anchor(unit)}"><code>{unit.name}</code></a>'
+            if split:
+                f.write(f"| {link} | {essential or '—'} | {extra or '—'} |\n")
+            else:
+                f.write(f"| {link} | {essential or extra} |\n")
+
+        if split and system.essential_symbols_header and system.full_symbols_header:
+            common = system.essential_symbols_header
+            full = system.full_symbols_header
+            f.write("\n")
+            f.write('!!! note "Two headers"\n\n')
+            f.write(
+                f"    The essential symbols come from `<{common}>`. The rest need\n"
+                f"    `<{full}>`, which is more expensive to compile, so include it\n"
+                "    only when you need an unusual prefix.\n"
+            )
+
     def _write_unit_row(self, f, unit: Unit, system: SystemInfo):
         """Write a unit table row"""
 
@@ -3478,26 +3651,14 @@ class DocumentationGenerator:
             return name
 
         # Determine the subnamespace prefix to display
-        # For imported units in subnamespaces, use subnamespace field
-        # For units defined with origin_namespace (like si2019), extract from origin_namespace
-        subns_prefix = None
-        if unit.subnamespace and unit.is_alias:
-            # Imported unit in a subnamespace - use subnamespace for display
-            subns_prefix = unit.subnamespace
-        elif unit.origin_namespace:
-            # Extract subnamespace from origin_namespace (e.g., "mp_units::si::si2019" -> "si2019")
-            parts = unit.origin_namespace.replace("mp_units::", "").split("::")
-            if len(parts) > 1:  # Has a subnamespace
-                subns_prefix = parts[-1]  # Last component is the subnamespace
-        elif unit.subnamespace:
-            subns_prefix = unit.subnamespace
+        subns_prefix = self._unit_anchor_prefix(unit)
 
         # Show namespace prefix if it exists
         unit_display = f"{subns_prefix}::{unit.name}" if subns_prefix else unit.name
         unit_display_with_breaks = add_word_breaks(unit_display)
 
         # Anchor ID should include subnamespace to avoid conflicts
-        anchor_id = f"{subns_prefix}-{unit.name}" if subns_prefix else unit.name
+        anchor_id = self._unit_anchor(unit)
 
         if unit.alias_target:
             # This is an alias - show reference to original (linkified). The symbol comes from
@@ -3736,35 +3897,17 @@ class DocumentationGenerator:
                     imported_system = self.parser.systems[imported_sys]
                     for unit in imported_system.units:
                         if not unit.is_alias:
-                            subns_prefix = None
-                            if unit.origin_namespace:
-                                parts = unit.origin_namespace.replace(
-                                    "mp_units::", ""
-                                ).split("::")
-                                if len(parts) > 1:
-                                    subns_prefix = parts[-1]
-                            elif unit.subnamespace:
-                                subns_prefix = unit.subnamespace
-                            anchor_id = (
-                                f"{subns_prefix}-{unit.name}"
-                                if subns_prefix
-                                else unit.name
+                            priority_refs[unit.name] = (
+                                imported_sys,
+                                self._unit_anchor(unit),
                             )
-                            priority_refs[unit.name] = (imported_sys, anchor_id)
 
         for sys_ns, system in self.parser.systems.items():
             # Add units
             for unit in system.units:
-                # Compute anchor ID the same way as in the unit table generation
-                subns_prefix = None
-                if unit.origin_namespace:
-                    parts = unit.origin_namespace.replace("mp_units::", "").split("::")
-                    if len(parts) > 1:
-                        subns_prefix = parts[-1]
-                elif unit.subnamespace:
-                    subns_prefix = unit.subnamespace
-
-                anchor_id = f"{subns_prefix}-{unit.name}" if subns_prefix else unit.name
+                # Anchor ID and sub-namespace, computed exactly as the unit table does
+                subns_prefix = self._unit_anchor_prefix(unit)
+                anchor_id = self._unit_anchor(unit)
 
                 # Determine which system this unit should link to for unqualified references
                 # For aliases (imported units), unqualified refs link to the origin system
@@ -3955,6 +4098,20 @@ class DocumentationGenerator:
                 identifier.split("::")[-1] if "::" in identifier else identifier
             )
 
+            # A reference qualified with a system (e.g. `si::si2019::planck_constant`) names
+            # the system that declares the entity. Resolve it there: this page may carry an
+            # alias row for the same name, and that row is anchored under its own
+            # sub-namespace, so linking locally would point at the alias, not the definition.
+            if "::" in identifier:
+                parts = identifier.split("::")
+                if len(parts) > 1 and parts[0] in self.parser.systems:
+                    qualified_key = f"{parts[0]}::{parts[-1]}"
+                    if qualified_key in all_refs:
+                        target_sys, anchor = all_refs[qualified_key]
+                        if target_sys == current_system.namespace:
+                            return make_link(display_text, f"#{anchor}")
+                        return make_link(display_text, f"{target_sys}.md#{anchor}")
+
             # Special handling for sub-namespace references (e.g., non_si::day)
             # Look for units where origin_namespace matches the namespace prefix
             if "::" in identifier:
@@ -3962,31 +4119,22 @@ class DocumentationGenerator:
                 if len(parts) == 2:
                     potential_origin_ns = parts[0]
                     entity_name = parts[1]
-                    # Check all systems for a unit with this origin_namespace
+                    # Check all systems for a unit with this origin_namespace. An alias
+                    # re-declares a name the sub-namespace does not own, so it never answers
+                    # for it here.
                     for sys_ns, system in self.parser.systems.items():
                         for unit in system.units:
                             # origin_namespace contains full path like "mp_units::non_si"
                             # Check if it ends with the potential_origin_ns
                             if (
                                 unit.name == entity_name
+                                and not unit.is_alias
                                 and unit.origin_namespace
                                 and unit.origin_namespace.endswith(potential_origin_ns)
                             ):
-                                # Compute anchor ID with subnamespace prefix
-                                subns_prefix = None
-                                if unit.origin_namespace:
-                                    ns_parts = unit.origin_namespace.replace(
-                                        "mp_units::", ""
-                                    ).split("::")
-                                    if len(ns_parts) > 1:
-                                        subns_prefix = ns_parts[-1]
-                                elif unit.subnamespace:
-                                    subns_prefix = unit.subnamespace
-                                anchor_id = (
-                                    f"{subns_prefix}-{unit.name}"
-                                    if subns_prefix
-                                    else unit.name
-                                )
+                                anchor_id = self._unit_anchor(unit)
+                                if sys_ns == current_system.namespace:
+                                    return make_link(display_text, f"#{anchor_id}")
                                 return make_link(
                                     display_text, f"{sys_ns}.md#{anchor_id}"
                                 )

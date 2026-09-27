@@ -18,6 +18,12 @@ watch:
 # Hooks
 hooks:
   - scripts/systems_reference.py
+  # Navigation, cross-references and synopsis highlighting for the API
+  # reference. Also regenerates it, from `on_config` rather than the more
+  # natural `on_pre_build`, because the tagfile is read during `on_config`.
+  # Regeneration is skipped unless a header, the MrDocs configuration, a
+  # template or the clang-format style changed.
+  - scripts/mrdocs_xref.py
 
 # Configuration
 theme:
@@ -32,6 +38,10 @@ theme:
     - content.code.copy
     # - navigation.expand
     - navigation.indexes
+    # Renders only the branch around the active page. The API reference has
+    # ~5300 pages; `scripts/mrdocs_xref.py` grafts the one being viewed onto
+    # its namespace, and this keeps the rest out of every page.
+    - navigation.prune
     # - navigation.sections
     - navigation.tabs
     - navigation.footer
@@ -69,17 +79,30 @@ theme:
     text: Roboto
     code: Roboto Mono
 
+# A broken link still builds a page, so it is found by a reader rather than by CI. Only
+# `links.not_found` warns by default; a dead `#fragment` and a link MkDocs cannot resolve
+# are reported at INFO, which is why they accumulated through green builds. Raised to
+# warnings, `mkdocs build --strict` rejects them - see the `link-check` job in
+# `.github/workflows/documentation.yml`.
+validation:
+  links:
+    anchors: warn
+    absolute_links: warn
+    unrecognized_links: warn
+
 # Plugins
 plugins:
   # `draft_if_future_date` holds a post back until its own `date` arrives, so a finished post can be
   # merged early instead of being carried as a `draft: true` that someone has to remember to flip.
   # It only applies to posts with **no** `draft` key at all: an explicit `draft: false` opts the post
   # out of the date check and publishes it immediately.
+  #
+  # A drafted post is dropped from the build, and its links go with it: nine dead links once rode a
+  # scheduled post all the way to publication this way. Setting the variable below to `false` builds
+  # those posts, so the `link-check` job can check one before its date arrives. Only that job sets
+  # it; a publishing build leaves the default alone.
   - blog:
-      draft_if_future_date: true
-  - exclude:
-      glob:
-        - api_reference/src/*
+      draft_if_future_date: !ENV [MP_UNITS_BLOG_DRAFT_IF_FUTURE_DATE, true]
   - rss:
       match_path: blog/posts/.*
       date_from_meta:
@@ -88,8 +111,11 @@ plugins:
         - categories
         - tags
   - search
+  # Social cards need the imaging toolchain and render nothing a link check reads, so the
+  # `link-check` job turns them off with the first variable. `!ENV` takes the last entry as the
+  # default, so everything else keeps following `CI` as before.
   - social:
-      enabled: !ENV [CI, false]
+      enabled: !ENV [MP_UNITS_SOCIAL_CARDS, CI, false]
       cards_layout_options:
         background_color: "#00599c"
   - tags
@@ -101,6 +127,7 @@ extra:
 
 extra_css:
   - stylesheets/extra.css
+  - stylesheets/mrdocs.css
 
 extra_javascript:
   - javascripts/ce_embed.js
@@ -183,7 +210,6 @@ nav:
           - Interface Introduction: users_guide/framework_basics/interface_introduction.md
           - Design Overview: users_guide/framework_basics/design_overview.md
           - Systems of Quantities: users_guide/framework_basics/systems_of_quantities.md
-          - Quantity Convertibility Algorithm: users_guide/framework_basics/quantity_convertibility_algorithm.md
           - Systems of Units: users_guide/framework_basics/systems_of_units.md
           - Simple and Typed Quantities: users_guide/framework_basics/simple_and_typed_quantities.md
           - Value Conversions: users_guide/framework_basics/value_conversions.md
@@ -500,7 +526,7 @@ nav:
               - volume (hep): reference/systems_reference/hierarchies/volume_hep.md
               - volume (isq): reference/systems_reference/hierarchies/volume_isq.md
               - volume_flow_rate: reference/systems_reference/hierarchies/volume_flow_rate.md
-      - API Reference: reference/api_reference.md
+      - API Reference: reference/api_reference/overview.md
       - Glossary: reference/glossary.md
       - Bibliography: reference/bibliography.md
   - Blog:
