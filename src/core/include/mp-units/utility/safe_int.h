@@ -22,8 +22,9 @@
 
 #pragma once
 
+#include <mp-units/bits/config.h>
+#include <mp-units/bits/diagnostics.h>
 #include <mp-units/bits/fixed_point.h>
-#include <mp-units/bits/hacks.h>
 #include <mp-units/bits/module_macros.h>
 #include <mp-units/utility/constrained.h>
 #if MP_UNITS_HOSTED
@@ -70,16 +71,16 @@ MP_UNITS_EXPORT struct safe_int_terminate_policy : terminate_policy {
   [[noreturn]] static void on_overflow(std::string_view) noexcept { std::abort(); }
 };
 
-#if MP_UNITS_HOSTED
+#if MP_UNITS_HAS_EXCEPTIONS
 
 /**
- * @brief Error policy that throws std::overflow_error on overflow (hosted only).
+ * @brief Error policy that throws std::overflow_error on overflow (hosted, exceptions enabled).
  */
 MP_UNITS_EXPORT struct safe_int_throw_policy : throw_policy {
   [[noreturn]] static void on_overflow(std::string_view msg) { throw std::overflow_error(std::string(msg)); }
 };
 
-#endif  // MP_UNITS_HOSTED
+#endif  // MP_UNITS_HAS_EXCEPTIONS
 
 
 // ============================================================================
@@ -421,11 +422,11 @@ struct safe_int_binary_ops {
  * handler on detection.
  *
  * @tparam T            the underlying integral type (e.g. int, long, uint32_t)
- * @tparam ErrorPolicy  how to react to overflow — default: safe_int_throw_policy on hosted,
- *                      safe_int_terminate_policy on freestanding
+ * @tparam ErrorPolicy  how to react to overflow — default: safe_int_throw_policy on hosted with
+ *                      exceptions enabled, safe_int_terminate_policy otherwise
  */
 MP_UNITS_EXPORT template<detail::integral T,
-#if MP_UNITS_HOSTED
+#if MP_UNITS_HAS_EXCEPTIONS
                          OverflowPolicy ErrorPolicy = safe_int_throw_policy>
 #else
                          OverflowPolicy ErrorPolicy = safe_int_terminate_policy>

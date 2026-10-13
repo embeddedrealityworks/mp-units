@@ -22,7 +22,8 @@
 
 #pragma once
 
-#include <mp-units/bits/hacks.h>
+#include <mp-units/bits/config.h>
+#include <mp-units/bits/diagnostics.h>
 #include <mp-units/bits/module_macros.h>
 #include <mp-units/framework/customization_points.h>
 #if MP_UNITS_HOSTED
@@ -70,16 +71,16 @@ MP_UNITS_EXPORT struct terminate_policy {
   [[noreturn]] static void on_constraint_violation(std::string_view) noexcept { std::abort(); }
 };
 
-#if MP_UNITS_HOSTED
+#if MP_UNITS_HAS_EXCEPTIONS
 
 /**
- * @brief Error policy that throws std::domain_error on constraint violation (hosted only).
+ * @brief Error policy that throws std::domain_error on constraint violation (hosted, exceptions enabled).
  */
 MP_UNITS_EXPORT struct throw_policy {
   [[noreturn]] static void on_constraint_violation(std::string_view msg) { throw std::domain_error(std::string(msg)); }
 };
 
-#endif  // MP_UNITS_HOSTED
+#endif  // MP_UNITS_HAS_EXCEPTIONS
 
 MP_UNITS_EXPORT template<typename T, ConstraintPolicy ErrorPolicy>
 class constrained;
@@ -207,7 +208,7 @@ struct constrained_binary_ops {
  * on_constraint_violation(std::string_view))
  */
 MP_UNITS_EXPORT template<typename T,
-#if MP_UNITS_HOSTED
+#if MP_UNITS_HAS_EXCEPTIONS
                          ConstraintPolicy ErrorPolicy = throw_policy>
 #else
                          ConstraintPolicy ErrorPolicy = terminate_policy>

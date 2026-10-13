@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#include <mp-units/bits/hacks.h>
+#include <mp-units/bits/config.h>
 #include <mp-units/framework/customization_points.h>
 #include <mp-units/framework/quantity.h>
 #include <mp-units/framework/representation_concepts.h>
@@ -553,7 +553,7 @@ static_assert(utility::detail::neg_overflows<unsigned>(std::numeric_limits<unsig
 // ============================================================================
 
 static_assert(requires { safe_int_terminate_policy::on_overflow(""); });
-#if MP_UNITS_HOSTED
+#if MP_UNITS_HAS_EXCEPTIONS
 static_assert(requires { safe_int_throw_policy::on_overflow(""); });
 #endif
 
@@ -561,7 +561,7 @@ static_assert(requires { safe_int_throw_policy::on_overflow(""); });
 // safe_int<T, ErrorPolicy> default policy selection
 // ============================================================================
 
-#if MP_UNITS_HOSTED
+#if MP_UNITS_HAS_EXCEPTIONS
 static_assert(std::is_same_v<safe_int<int>, safe_int<int, safe_int_throw_policy>>);
 #else
 static_assert(std::is_same_v<safe_int<int>, safe_int<int, safe_int_terminate_policy>>);

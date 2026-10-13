@@ -26,7 +26,8 @@
 // NOLINTBEGIN(*-avoid-c-arrays)
 #pragma once
 
-#include <mp-units/bits/hacks.h>  // IWYU pragma: keep
+#include <mp-units/bits/config.h>  // IWYU pragma: keep
+#include <mp-units/bits/hacks.h>   // IWYU pragma: keep
 #include <mp-units/bits/module_macros.h>
 #include <mp-units/compat_macros.h>  // IWYU pragma: keep
 #include <mp-units/ext/type_traits.h>
@@ -273,7 +274,7 @@ public:
 #if MP_UNITS_HOSTED
   [[nodiscard]] constexpr const_reference at(size_type pos) const
   {
-    if (pos >= size()) throw std::out_of_range("basic_fixed_string::at");
+    if (pos >= size()) MP_UNITS_THROW(std::out_of_range("basic_fixed_string::at"));
     return (*this)[pos];
   }
 #endif

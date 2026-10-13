@@ -28,9 +28,10 @@
 // and the ingredient-matching algorithm for derived quantities. This is what the C++ type
 // system cannot express, so it stays in V3 (planned to be reimplemented in the value domain
 // with C++26 reflection).
-#include <mp-units/bits/hacks.h>
+#include <mp-units/bits/config.h>
 #include <mp-units/bits/quantity_spec_hierarchy_conversion.h>
 #include <mp-units/bits/ratio.h>
+#include <mp-units/compat_macros.h>
 #include <mp-units/ext/algorithm.h>
 #include <mp-units/ext/type_name.h>
 #include <mp-units/framework/quantity_spec_concepts.h>
@@ -46,6 +47,7 @@ import std;
 #include <initializer_list>
 #include <optional>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #endif
 #endif
@@ -135,7 +137,7 @@ struct [[nodiscard]] explode_result {
   specs_convertible_result result;
 };
 
-#if MP_UNITS_COMP_CLANG && MP_UNITS_COMP_CLANG < 17
+#if !MP_UNITS_HAS_AGGREGATE_CTAD
 
 template<QuantitySpec Q>
 explode_result(Q, specs_convertible_result) -> explode_result<Q>;
@@ -150,7 +152,7 @@ template<QuantitySpec Q>
   if constexpr (defines_equation(Q{}))
     return explode_result{Q::_equation_, specs_convertible_result::yes};
   else {
-    constexpr bool q_is_kind = requires { defined_as_kind_impl(Q{}); } && defined_as_kind_impl(Q{});
+    constexpr bool q_is_kind = detail::defined_as_kind(Q{});
     return explode_result{Q::_equation_, q_is_kind ? specs_convertible_result::explicit_conversion_beyond_kind
                                                    : specs_convertible_result::explicit_conversion};
   }
@@ -164,7 +166,7 @@ template<QuantitySpec Q, int... Ints>
   if constexpr (defines_equation(Q{}))
     return explode_result{pow<exp.num, exp.den>(Q::_equation_), specs_convertible_result::yes};
   else {
-    constexpr bool q_is_kind = requires { defined_as_kind_impl(Q{}); } && defined_as_kind_impl(Q{});
+    constexpr bool q_is_kind = detail::defined_as_kind(Q{});
     return explode_result{pow<exp.num, exp.den>(Q::_equation_),
                           q_is_kind ? specs_convertible_result::explicit_conversion_beyond_kind
                                     : specs_convertible_result::explicit_conversion};
@@ -182,7 +184,7 @@ struct [[nodiscard]] extract_common_base_result {
   RestTo rest_to{};
 };
 
-#if MP_UNITS_COMP_CLANG && MP_UNITS_COMP_CLANG < 17
+#if !MP_UNITS_HAS_AGGREGATE_CTAD
 
 extract_common_base_result(specs_convertible_result) -> extract_common_base_result<type_list<>, type_list<>>;
 
@@ -321,6 +323,92 @@ template<QuantitySpec Equation, TypeList Num, TypeList Den>
 template<QuantitySpec From, QuantitySpec To>
 [[nodiscard]] consteval specs_convertible_result convertible(From, To);
 
+// The kind tree an ingredient belongs to. It names a declared kind when its root was declared with `is_kind`,
+// which also covers the quantities derived from it that are not kinds themselves (`rotational_displacement` and
+// `angular_measure` both give `angular_measure`). An alias rather than a function: `get_kind_tree_root` is
+// already instantiated for every ingredient the conversion engine sees, so naming its result costs nothing.
+template<typename T>
+using kind_root_of = MP_UNITS_NONCONST_TYPE(detail::get_kind_tree_root(detail::get_factor(T{})));
+
+template<typename K, typename... Ts>
+[[nodiscard]] consteval int count_declared_kind(type_list<Ts...>)
+{
+  return (0 + ... + (std::is_same_v<kind_root_of<Ts>, K> ? 1 : 0));
+}
+
+struct declared_kinds_info {
+  // every declared kind occurs as often in the numerator as in the denominator
+  bool balanced = true;
+  // a numerator and a denominator ingredient of the same declared kind, if any
+  int num_index = -1;
+  int den_index = -1;
+  [[nodiscard]] constexpr bool can_cancel() const { return num_index >= 0; }
+};
+
+/**
+ * @brief What the declared kinds among a numerator and a denominator allow
+ *
+ * Ingredients whose dimensions cancel form a plain ratio only when the declared kinds among them cancel as
+ * well: `angular_velocity * radius / speed` still carries an angle, so it must not become `dimensionless`
+ * implicitly, just as `angular_velocity * radius` does not become `speed`. And a numerator and a denominator
+ * ingredient of the same declared kind (e.g., the `rotational_displacement` exploded out of
+ * `angular_velocity` and the `angular_measure` that `rad` brings in) cancel like a plain ratio, as an angle
+ * divided by an angle is a number; powers are left alone, so `pow<2>(angular_measure) / angular_measure`
+ * keeps one angle.
+ *
+ * Both answers come from one instantiation per numerator/denominator pair, and almost every pair the
+ * conversion engine visits carries no declared kind at all, so that case returns before anything is
+ * instantiated per element.
+ */
+template<typename... Num, typename... Den>
+[[nodiscard]] consteval declared_kinds_info analyze_declared_kinds(type_list<Num...>, type_list<Den...>)
+{
+  if constexpr (!(... || detail::defined_as_kind(kind_root_of<Num>{})) &&
+                !(... || detail::defined_as_kind(kind_root_of<Den>{})))
+    return {};
+  else {
+    [[maybe_unused]] constexpr auto balanced = []<typename Ingredient>(Ingredient) {
+      using kind = kind_root_of<Ingredient>;
+      return !detail::defined_as_kind(kind{}) || detail::count_declared_kind<kind>(type_list<Num...>{}) ==
+                                                   detail::count_declared_kind<kind>(type_list<Den...>{});
+    };
+    declared_kinds_info res{(... && balanced(Num{})) && (... && balanced(Den{}))};
+    [[maybe_unused]] int num_index = 0;
+    [[maybe_unused]] const auto match_numerator = [&]<typename NumIngredient>(NumIngredient) {
+      if constexpr (!is_specialization_of_power<NumIngredient>) {
+        using kind = kind_root_of<NumIngredient>;
+        if constexpr (detail::defined_as_kind(kind{})) {
+          [[maybe_unused]] int den_index = 0;
+          [[maybe_unused]] const auto match_denominator = [&]<typename DenIngredient>(DenIngredient) {
+            if constexpr (!is_specialization_of_power<DenIngredient>)
+              if (!res.can_cancel() && std::is_same_v<kind_root_of<DenIngredient>, kind>) {
+                res.num_index = num_index;
+                res.den_index = den_index;
+              }
+            ++den_index;
+          };
+          (match_denominator(Den{}), ...);
+        }
+      }
+      ++num_index;
+    };
+    (match_numerator(Num{}), ...);
+    return res;
+  }
+}
+
+// `List` without its element at `I`, or `List` itself when there is no such element. MSVC forms the
+// template arguments of a discarded `if constexpr` branch, so a "not found" index must not reach
+// `type_list_extract`, whose constraint would reject it.
+template<int I, typename... Ts>
+[[nodiscard]] consteval auto type_list_erase_at(type_list<Ts...>)
+{
+  if constexpr (I >= 0 && I < static_cast<int>(sizeof...(Ts)))
+    return typename type_list_extract<type_list<Ts...>, static_cast<std::size_t>(I)>::rest{};
+  else
+    return type_list<Ts...>{};
+}
+
 template<TypeList NumFrom, TypeList DenFrom, TypeList NumTo, TypeList DenTo>
 [[nodiscard]] constexpr specs_convertible_result are_ingredients_convertible(NumFrom num_from, DenFrom den_from,
                                                                              NumTo num_to, DenTo den_to)
@@ -331,7 +419,8 @@ template<TypeList NumFrom, TypeList DenFrom, TypeList NumTo, TypeList DenTo>
   constexpr std::size_t den_to_size = type_list_size<DenTo>;
 
   // if at least one of the sides is empty then we compare with dimensionless
-  if constexpr (num_from_size == den_from_size && num_to_size + den_to_size == 0)
+  if constexpr (num_from_size == den_from_size && num_to_size + den_to_size == 0 &&
+                detail::analyze_declared_kinds(NumFrom{}, DenFrom{}).balanced)
     return specs_convertible_result::yes;
   else if constexpr (num_from_size + den_from_size == 0 && num_to_size == den_to_size && num_to_size >= 1)
     return specs_convertible_result::explicit_conversion;
@@ -345,6 +434,16 @@ template<TypeList NumFrom, TypeList DenFrom, TypeList NumTo, TypeList DenTo>
       if (dens->result == specs_convertible_result::no) return specs_convertible_result::no;
       return detail::min(dens->result,
                          detail::are_ingredients_convertible(num_from, dens->rest_from, num_to, dens->rest_to));
+    } else if constexpr (constexpr auto from_kinds = detail::analyze_declared_kinds(NumFrom{}, DenFrom{});
+                         from_kinds.can_cancel()) {
+      return detail::are_ingredients_convertible(detail::type_list_erase_at<from_kinds.num_index>(num_from),
+                                                 detail::type_list_erase_at<from_kinds.den_index>(den_from), num_to,
+                                                 den_to);
+    } else if constexpr (constexpr auto to_kinds = detail::analyze_declared_kinds(NumTo{}, DenTo{});
+                         to_kinds.can_cancel()) {
+      return detail::are_ingredients_convertible(num_from, den_from,
+                                                 detail::type_list_erase_at<to_kinds.num_index>(num_to),
+                                                 detail::type_list_erase_at<to_kinds.den_index>(den_to));
     } else {
       // otherwise, get the ingredient with the highest complexity
       constexpr auto max_compl_res = detail::get_max_complexity(NumFrom{}, DenFrom{}, NumTo{}, DenTo{});

@@ -23,6 +23,8 @@
 #pragma once
 
 // IWYU pragma: private, include <mp-units/framework.h>
+#include <mp-units/bits/config.h>
+#include <mp-units/bits/diagnostics.h>
 #include <mp-units/bits/hacks.h>
 #include <mp-units/bits/module_macros.h>
 #include <mp-units/bits/sudo_cast.h>
@@ -117,7 +119,7 @@ concept ScalarRepConvertible =
      type_name<Rep>(), type_name<T>()));
 
 template<auto R>
-concept UnitOne = Reference<MP_UNITS_NTTP_TYPE(R)> &&
+concept UnitOne = Reference<MP_UNITS_NTTP_HACK(decltype(R))> &&
                   (equivalent(get_unit(R), one) && detail::get_associated_quantity(get_unit(R)) == dimensionless);
 
 template<auto R>
@@ -134,13 +136,13 @@ concept ImplicitFromNumberQuantity = Quantity<Q> && ImplicitFromNumber<Q::refere
 // expression-template results (e.g. Eigen, Blaze) are checked and stored as their evaluated
 // concrete type rather than the lazy proxy type.
 template<auto QS, typename Func, typename T, typename U>
-concept InvokeResultOf = QuantitySpec<MP_UNITS_NTTP_TYPE(QS)> && std::regular_invocable<Func, T, U> &&
+concept InvokeResultOf = QuantitySpec<MP_UNITS_NTTP_HACK(decltype(QS))> && std::regular_invocable<Func, T, U> &&
                          RepresentationOf<representation_canonical_type_t<std::invoke_result_t<Func, T, U>>, QS>;
 
 template<typename Func, typename Q1, typename Q2,
          auto QS = std::invoke_result_t<Func, MP_UNITS_NONCONST_TYPE(Q1::quantity_spec),
                                         MP_UNITS_NONCONST_TYPE(Q2::quantity_spec)>{}>
-concept InvocableQuantities = QuantitySpec<MP_UNITS_NTTP_TYPE(QS)> && Quantity<Q1> && Quantity<Q2> &&
+concept InvocableQuantities = QuantitySpec<MP_UNITS_NTTP_HACK(decltype(QS))> && Quantity<Q1> && Quantity<Q2> &&
                               InvokeResultOf<QS, Func, typename Q1::rep, typename Q2::rep>;
 
 // A representation whose tensor order is that of a vector or tensor (order >= 1). Written as a nested
@@ -158,11 +160,11 @@ concept OrderRaisingRepresentation = requires { requires tensor_order<T> >= 1; }
 // a real->complex field mismatch is not bridged either.
 template<auto QS>
 concept ScalarCharacterSpec =
-  QuantitySpec<MP_UNITS_NTTP_TYPE(QS)> && (get_character(QS).order == quantity_tensor_order::scalar);
+  QuantitySpec<MP_UNITS_NTTP_HACK(decltype(QS))> && (get_character(QS).order == quantity_tensor_order::scalar);
 
 template<auto QS, typename Func, typename T, typename U>
 concept ScalableResultOf =
-  QuantitySpec<MP_UNITS_NTTP_TYPE(QS)> && std::regular_invocable<Func, T, U> &&
+  QuantitySpec<MP_UNITS_NTTP_HACK(decltype(QS))> && std::regular_invocable<Func, T, U> &&
   (RepresentationOf<representation_canonical_type_t<std::invoke_result_t<Func, T, U>>, QS> ||
    (ScalarCharacterSpec<QS> &&
     OrderRaisingRepresentation<representation_canonical_type_t<std::invoke_result_t<Func, T, U>>> &&
@@ -538,22 +540,15 @@ struct quantity_iface {
   // tuple-like decomposition of a vector quantity into named 1D-vector components (see
   // framework/vector_components.h).
   template<std::size_t Idx, auto R1, typename Rep1>
-#if !(defined MP_UNITS_COMP_CLANG && MP_UNITS_COMP_CLANG < 17)
     requires DecomposableIndex<get_quantity_spec(R1), Rep1, Idx>
-#endif
   [[nodiscard]] friend constexpr Quantity auto get(const quantity<R1, Rep1>& q)
   {
     constexpr auto comp = vector_components<get_quantity_spec(R1)>::template axis<Idx>;
     return component_access<Idx>(q.numerical_value_in(get_unit(R1))) * comp[get_unit(R1)];
   }
 
-#if defined MP_UNITS_COMP_CLANG && MP_UNITS_COMP_CLANG < 17
-  template<auto QS, auto R1, typename Rep1>
-    requires(!std::integral<decltype(QS)>)
-#else
   template<QuantitySpec auto QS, auto R1, typename Rep1>
     requires DecomposableAxis<get_quantity_spec(R1), Rep1, QS>
-#endif
   [[nodiscard]] friend constexpr Quantity auto get(const quantity<R1, Rep1>& q)
   {
     return get<axis_index_of<QS>(vector_components<get_quantity_spec(R1)>{})>(q);
@@ -636,7 +631,7 @@ public:
   template<typename Value, Reference R2>
     requires(equivalent(unit, get_unit(R2{}))) && (!detail::RepConstructibleFrom<rep, Value>)
   constexpr quantity(Value val, R2)
-#if __cpp_deleted_function
+#if MP_UNITS_HAS_DELETED_FUNCTION_MESSAGE
     = delete ("Conversion is truncating");
 #else
     = delete;
@@ -667,7 +662,7 @@ public:
     requires detail::ExplicitFromNumber<reference> && (!detail::RepConstructibleFrom<rep, Value>)
   constexpr explicit(!std::convertible_to<Value, rep> ||
                      !mp_units::implicitly_convertible(quantity_spec, dimensionless)) quantity(Value val)
-#if __cpp_deleted_function
+#if MP_UNITS_HAS_DELETED_FUNCTION_MESSAGE
     = delete ("Conversion is truncating");
 #else
     = delete;
@@ -815,7 +810,7 @@ public:
   template<Unit U>
     requires(equivalent(U{}, unit))
   constexpr const rep&& numerical_value_ref_in(U) const&& noexcept
-#if __cpp_deleted_function
+#if MP_UNITS_HAS_DELETED_FUNCTION_MESSAGE
     = delete ("Can't form a reference to a temporary");
 #else
     = delete;
@@ -1248,8 +1243,8 @@ class MP_UNITS_STD_FMT::formatter<mp_units::quantity<Reference, Rep>, Char> {
   {
     if (begin == end || *begin == ':' || *begin == '}') return begin;
     if (*begin != '%')
-      throw MP_UNITS_STD_FMT::format_error(
-        "`quantity-specs` should start with a `conversion-spec` ('%' characters expected)");
+      MP_UNITS_THROW(MP_UNITS_STD_FMT::format_error(
+        "`quantity-specs` should start with a `conversion-spec` ('%' characters expected)"));
     auto ptr = begin;
     while (ptr != end) {
       auto ch = *ptr;
@@ -1269,7 +1264,7 @@ class MP_UNITS_STD_FMT::formatter<mp_units::quantity<Reference, Rep>, Char> {
       }
       if (begin != ptr) handler.on_text(begin, ptr);
       ++ptr;  // consume '%'
-      if (ptr == end) throw MP_UNITS_STD_FMT::format_error("invalid `conversion-spec` format");
+      if (ptr == end) MP_UNITS_THROW(MP_UNITS_STD_FMT::format_error("invalid `conversion-spec` format"));
 
       ch = *ptr++;
       switch (ch) {
@@ -1289,7 +1284,7 @@ class MP_UNITS_STD_FMT::formatter<mp_units::quantity<Reference, Rep>, Char> {
           handler.on_text(ptr - 1, ptr);
           break;
         default:
-          throw MP_UNITS_STD_FMT::format_error(std::string("unknown `placement-type` token '") + ch + "'");
+          MP_UNITS_THROW(MP_UNITS_STD_FMT::format_error(std::string("unknown `placement-type` token '") + ch + "'"));
       }
       begin = ptr;
     }
@@ -1301,20 +1296,21 @@ class MP_UNITS_STD_FMT::formatter<mp_units::quantity<Reference, Rep>, Char> {
   constexpr It parse_default_spec(It begin, It end, Formatter& f, std::string& format_str)
   {
     if (begin == end || *begin != '[')
-      throw MP_UNITS_STD_FMT::format_error("`default-spec` should contain a `[` character");
+      MP_UNITS_THROW(MP_UNITS_STD_FMT::format_error("`default-spec` should contain a `[` character"));
     auto it = ++begin;
     for (int nested_brackets = 0; it != end && !(*it == ']' && nested_brackets == 0); it++) {
       if (*it == '[') ++nested_brackets;
       if (*it == ']') {
-        if (nested_brackets == 0) throw MP_UNITS_STD_FMT::format_error("unmatched ']' in format string");
+        if (nested_brackets == 0) MP_UNITS_THROW(MP_UNITS_STD_FMT::format_error("unmatched ']' in format string"));
         --nested_brackets;
       }
     }
     format_str = "{:" + std::string(begin, it) + '}';
-    if (it == end) throw MP_UNITS_STD_FMT::format_error("unmatched '[' in format string");
+    if (it == end) MP_UNITS_THROW(MP_UNITS_STD_FMT::format_error("unmatched '[' in format string"));
     MP_UNITS_STD_FMT::basic_format_parse_context<Char> ctx(std::string_view(begin, it));
     auto ptr = f.parse(ctx);
-    if (ptr != it) throw MP_UNITS_STD_FMT::format_error("invalid subentity format '" + std::string(begin, it) + "'");
+    if (ptr != it)
+      MP_UNITS_THROW(MP_UNITS_STD_FMT::format_error("invalid subentity format '" + std::string(begin, it) + "'"));
     return ++it;  // skip `]`
   }
 
@@ -1322,7 +1318,7 @@ class MP_UNITS_STD_FMT::formatter<mp_units::quantity<Reference, Rep>, Char> {
   [[nodiscard]] constexpr It parse_defaults_specs(It begin, It end)
   {
     if (begin == end || *begin == '}') return begin;
-    if (*begin++ != ':') throw MP_UNITS_STD_FMT::format_error("`defaults-specs` should start with a `:`");
+    if (*begin++ != ':') MP_UNITS_THROW(MP_UNITS_STD_FMT::format_error("`defaults-specs` should start with a `:`"));
     do {
       auto ch = *begin++;
       // TODO check if not repeated
@@ -1337,7 +1333,7 @@ class MP_UNITS_STD_FMT::formatter<mp_units::quantity<Reference, Rep>, Char> {
           begin = parse_default_spec(begin, end, dimension_formatter_, dimension_format_str_);
           break;
         default:
-          throw MP_UNITS_STD_FMT::format_error(std::string("unknown `subentity-id` token '") + ch + "'");
+          MP_UNITS_THROW(MP_UNITS_STD_FMT::format_error(std::string("unknown `subentity-id` token '") + ch + "'"));
       }
     } while (begin != end && *begin != '}');
     return begin;
