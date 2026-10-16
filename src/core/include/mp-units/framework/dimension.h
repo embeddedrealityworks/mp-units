@@ -111,6 +111,11 @@ struct dimension_interface {
 
   [[nodiscard]] friend consteval Dimension auto sqrt(Dimension auto d) { return pow<1, 2>(d); }
   [[nodiscard]] friend consteval Dimension auto cbrt(Dimension auto d) { return pow<1, 3>(d); }
+  // `dimension_one` is defined after this interface, so the identity is passed as a type
+  [[nodiscard]] friend consteval Dimension auto inverse(Dimension auto d)
+  {
+    return detail::expr_invert<derived_dimension, struct dimension_one>(d);
+  }
 };
 
 }  // namespace detail
@@ -206,8 +211,6 @@ MP_UNITS_EXPORT inline constexpr struct dimension_one final :
 } dimension_one;
 
 MP_UNITS_EXPORT_BEGIN
-
-[[nodiscard]] consteval Dimension auto inverse(Dimension auto d) { return dimension_one / d; }
 
 // The suppression covers the whole definition: Clang up to 21 reports the deprecated member from
 // the implicitly defined copy constructor, while a user naming `encoding` is still warned

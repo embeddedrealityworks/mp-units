@@ -161,6 +161,34 @@ inline constexpr bool is_complete = requires { sizeof(T) > 0; };
 #define MP_UNITS_QUANTITY_POINT_CTAD_HACK 0
 #endif
 
+// Hack for a compiler bug: MSVC instantiates the initializer of a `constexpr` static data member of
+// a class template together with the class, instead of only when the member is used ([temp.inst]).
+// The deprecated `character` members of quantity specifications, `quantity`, and `quantity_point` are
+// ill-formed when the character isn't definite (a quantity kind, a specification with a kind factor,
+// or one defined by a kind equation), so on MSVC every such type fails (C3615 or C2131). The hack omits
+// all of those members there. Confirmed on MSVC 19.51 (`_MSC_VER` 1951). Older versions are untested and
+// keep the hack. Extend the branch to a newer version only after that version is confirmed to have the
+// same bug.
+#if MP_UNITS_COMP_MSVC && MP_UNITS_COMP_MSVC <= 1951
+#define MP_UNITS_EAGER_STATIC_MEMBER_INIT_HACK 1
+#else
+#define MP_UNITS_EAGER_STATIC_MEMBER_INIT_HACK 0
+#endif
+
+// Hack for a compiler bug: GCC 16 fails to constant-evaluate a contract predicate in some valid
+// contexts ("contract condition is not constant"): the precondition of a constructor called in a
+// template argument, which is how a relative point origin is defined, or in the initializer of a static
+// variable, which GCC tries to constant-initialize. Wrap such a precondition in
+// `MP_UNITS_PRE_CONSTEVAL_HACK` and its in-body check in `MP_UNITS_EXPECTS_CONSTEVAL_HACK` (both in
+// `compat_macros.h`): on GCC 16 the check moves into the body, where `MP_UNITS_PRE_BODY` evaluates it
+// without a contract during constant evaluation. Use them only where the plain `MP_UNITS_PRE` fails.
+// Extend the branch to a newer version only after that version is confirmed to have the same bug.
+#if MP_UNITS_COMP_GCC == 16
+#define MP_UNITS_CONSTEVAL_PRE_HACK 1
+#else
+#define MP_UNITS_CONSTEVAL_PRE_HACK 0
+#endif
+
 // Hack: before C++23 the standard library has no `std::from_range`, which the `fixed_string`
 // constructor taking a range relies on. Declaring it in `namespace std` is undefined behavior
 // ([namespace.std]), accepted here so that C++20 users can spell the same constructor call.

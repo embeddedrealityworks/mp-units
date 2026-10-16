@@ -288,6 +288,11 @@ struct unit_interface {
   [[nodiscard]] friend consteval Unit auto cbrt(Unit auto u) { return pow<1, 3>(u); }
   [[nodiscard]] friend consteval Unit auto square(Unit auto u) { return pow<2>(u); }
   [[nodiscard]] friend consteval Unit auto cubic(Unit auto u) { return pow<3>(u); }
+  // `one` is defined after this interface, so the identity is passed as a type
+  [[nodiscard]] friend MP_UNITS_CONSTEVAL_HACK Unit auto inverse(Unit auto u)
+  {
+    return detail::expr_invert<derived_unit, struct one>(u);
+  }
 };
 
 template<Unit U, bool = requires { U::_point_origin_; }>

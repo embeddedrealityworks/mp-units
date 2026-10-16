@@ -549,7 +549,9 @@ template<template<typename...> typename To, SymbolicArg OneType,
 template<template<typename...> typename To, SymbolicArg OneType, typename T>
 [[nodiscard]] consteval auto expr_invert(T)
 {
-  if constexpr (is_specialization_of<T, To>)
+  if constexpr (std::is_same_v<T, OneType>)
+    return OneType{};
+  else if constexpr (is_specialization_of<T, To>)
     // the usage of `identity_fn` below helps to resolve an using alias identifier to the actual
     // type identifier in the clang compile-time errors
     return identity_fn{}(expr_make_spec_impl<typename T::_den_, typename T::_num_, OneType, To>());
@@ -583,11 +585,18 @@ template<std::intmax_t Num, std::intmax_t Den, template<typename...> typename To
   requires(Den != 0)
 [[nodiscard]] consteval auto expr_pow(T v)
 {
+  constexpr detail::ratio exp{Num, Den};
   if constexpr (Num == 0 || std::is_same_v<T, OneType>)
     return OneType{};
-  else if constexpr (detail::ratio{Num, Den} == 1)
+  else if constexpr (exp == 1)
     return v;
-  else if constexpr (is_specialization_of<T, To>)
+  // `power` holds only positive exponents, so raise to the absolute value and swap the sides
+  else if constexpr (exp.num < 0) {
+    if constexpr (is_specialization_of<T, To>)
+      return expr_pow_impl<-exp.num, exp.den, To, OneType, Pred>(typename T::_den_{}, typename T::_num_{});
+    else
+      return expr_pow_impl<-exp.num, exp.den, To, OneType, Pred>(type_list<>{}, type_list<T>{});
+  } else if constexpr (is_specialization_of<T, To>)
     return expr_pow_impl<Num, Den, To, OneType, Pred>(typename T::_num_{}, typename T::_den_{});
   else if constexpr (Den == 1)
     return To<power<T, Num>>{};

@@ -43,6 +43,11 @@ This page documents the version history and changes for the **mp-units** library
 - fix: the inverse of an angle no longer converts implicitly to a plain number.
       `1 / isq::angular_measure` to `dimensionless` drops the angle, so it is explicit, and
       an angle doesn't convert to its own inverse, even with `quantity_cast`
+- fix: the kind boundary lowers every verdict between two named quantities, and between a
+      named quantity and a kind, where it used to lower only an `implicit` verdict, and
+      from a kind none at all. A `kind_of<isq::angular_velocity>` converts to a child
+      defined as `inverse(isq::duration)` only explicitly, and two siblings that each
+      carry a declared kind the other lacks don't convert, as their squares already didn't
 - (!) fix: ISQ definitions corrected against ISO/IEC 80000. `isq::angular_repetency` is
       `phase_angle / wavelength` (k = 2π/λ, like `angular_frequency`), so a phase speed
       ω/k converts to `length / time` implicitly and `1 / wavelength` is an angular
@@ -103,6 +108,31 @@ This page documents the version history and changes for the **mp-units** library
       `unit_symbol_formatting` and `dimension_symbol_formatting` now initialize their
       members with the concrete values those defaults pointed at, so behaviour is
       unchanged
+- (!) feat: a quantity kind admits every character. A kind spans its whole quantity tree
+      (the kind of `isq::speed` holds the scalar `isq::speed` and the vector
+      `isq::velocity` alike), and a simple quantity is of a kind as well, since the
+      specification its unit yields is a `kind_of<…>`. Only the representation can
+      restrict a kind's character, so `cartesian_vector{3., 4., 0.} * m / s` is a vector
+      quantity of the kind of `m / s`, and a kind stored in `double` admits every order.
+      `magnitude()` exists when the quantity may be a vector or a tensor and its
+      representation can produce a norm, and never on a concrete scalar such as
+      `isq::speed`
+- (!) feat: `QuantityOf`, `QuantityPointOf`, `QuantitySpecOf`, and `ReferenceOf` take a
+      character in place of a quantity specification. `QuantityOf` and `QuantityPointOf`
+      hold when the specification admits the character *and* the representation can fill
+      the slot. `QuantitySpecOf` and `ReferenceOf` ask only the specification, which is
+      how `utility::polar_vector` requires a scalar radius. A specification argument keeps
+      its quantity-tree meaning
+- (!) refactor: `quantity_spec::character` is deprecated in favour of the character-taking
+      concepts above, since a kind admits every character and a single value can't
+      describe that. It reports the character of a concrete specification and is
+      ill-formed for a kind such as `kind_of<isq::speed>` or the specification of
+      `m / s`, where 2.5 reported the tree root's character. `quantity::character` and
+      `quantity_point::character` exist only as deprecated members with the same rule,
+      so they are ill-formed for every simple quantity such as `30.0 * km / h`. MSVC up
+      to 19.51 instantiates the initializer of every such member eagerly, so there none
+      of these `character` members exist
+- (!) refactor: `quantity_spec::dimension` is deprecated in favour of `get_dimension(qs)`
 - feat: the GLM integration models the tuple protocol for `glm::vec`. GLM states a
       vector's length only through its static `length()`, so the plugin maps that onto
       `std::tuple_size` and adds the matching `std::tuple_element` and `get<I>`. A GLM
@@ -250,6 +280,17 @@ This page documents the version history and changes for the **mp-units** library
       `quantity` specialization — 476 in a unit-composition-heavy TU). Declarations drop
       2.1–3.3% of all function declarations per TU. Template instantiations are unchanged
       by construction: this is declaration cost, which no instantiation count can see
+- perf: three compile-time costs of this release's framework extensions trimmed where the
+      work was redundant. The sort predicates behind every quantity-spec and unit product
+      compare type names with `string_view::compare` instead of the comparison operators,
+      whose overload resolution probed the `std::error_code` converting constructors on
+      each call: an `isq.h` umbrella translation unit evaluates about 24 % fewer constant
+      expressions (Clang 23, C++26). The kinds-per-factor test of the spec operators is a
+      variable template rather than a concept, because at `-std=c++26` a concept's folds
+      are normalized per operand (P2963) and re-evaluated the `QuantitySpec` atoms of every
+      operand on every product. The component-wise `quantity` constructor orders its
+      constraint cheapest-first, so the `{value, reference}` construction behind
+      `42 * m` no longer runs the decomposition checks of every new quantity type
 - fix: `basic_fixed_string::swap` never compiled — it called an undeclared `swap_ranges`
       through `begin()`/`end()`, which yield `const_iterator` and cannot be written through.
       Nothing called it, so it was never instantiated. It now exchanges the contents
@@ -297,6 +338,29 @@ This page documents the version history and changes for the **mp-units** library
       or `codata::codata2014::magnetic_constant` for the exact pre-2019 one. These are NOT
       interchangeable with the `hep` constants of the same name, which belong to a
       different system of quantities
+- deprecated: `implicitly_convertible`, `explicitly_convertible` and `castable` in
+      `mp_units`. They are not proposed for standardization and have moved to
+      `mp_units::utility`. ADL doesn't find them there, so qualify the call:
+      `utility::implicitly_convertible(isq::width, isq::length)`. A generic interface
+      should constrain with `QuantityOf` or `QuantityPointOf` instead
+- (!) refactor: `pi_c`, the magnitude constant behind the `pi` unit, is an implementation
+      detail now. Use the `pi` unit instead, e.g., `pi * metre` rather than
+      `mag<pi_c> * metre`
+- fix: `pow()` of a dimension, a quantity specification, or a unit with a negative exponent
+      (e.g., `pow<-1>(metre)`) failed to compile and now yields the inverted expression
+- (!) refactor: a quantity equation keeps a kind per factor. A kind operand becomes a kind
+      factor of the result and a typed operand stays typed.
+      `kind_of<isq::length> / isq::duration` is now
+      `derived_quantity_spec<kind_of_<isq::length>, per<isq::duration>>` rather than
+      `isq::length / isq::duration`, so `42 * m / isq::duration(2 * s)` converts implicitly
+      to a child of `isq::speed` defined over `isq::height`, which it couldn't before. A
+      result whose factors are all kinds is a kind as before. A kind factor and a typed
+      factor of one tree stay separate, so `isq::duration(2 * s) / (1 * s)` is a ratio of
+      two _durations_ rather than `dimensionless`, and still converts to it implicitly
+- (!) refactor: `inverse()` of a dimension, a quantity specification, or a unit is now a
+      hidden friend, like `pow()`, `sqrt()`, and `cbrt()`. An unqualified call works as
+      before, but `mp_units::inverse(m)` no longer compiles and needs the qualification
+      dropped
 - (!) refactor: the `std-format-spec` helpers that formatters are written against (`fmt_align`,
       `fill_t`, `fmt_arg_ref`, `fill_align_width_format_specs`, `parse_align`,
       `parse_dynamic_spec`, `parse_fill_align_width`, `parse_nonnegative_int`,
@@ -362,6 +426,20 @@ This page documents the version history and changes for the **mp-units** library
 - feat: type conversions improved to raise compile-time warnings on truncation
 - feat: `natural_point_origin<QuantitySpec>` added (replaces `zeroth_point_origin<QuantitySpec>`)
 - feat: `is_natural_point_origin<T>` added (replaces `is_zeroth_point_origin<T>`)
+- feat: range-validated quantity points added (the bounds policy of an origin, such as
+        `check_in_range` or `wrap_to_range`, is enforced on construction from a value, on
+        unit and origin conversion, and in arithmetic)
+- feat: the bounds of a relative origin are checked at compile time to nest within those
+        of its nearest bounded ancestor
+- feat: a bounds policy with `bool operator()(const V& v) const` is a checking policy and
+        one with `V operator()(V v) const` is an adjusting policy (a value a checking
+        policy rejects goes to `constraint_violation_handler<Rep>`, and without one it
+        violates the precondition of the operation storing it)
+- feat: `exclusive_bound{q}` added to exclude an end from the range of a bounds policy
+        (accepted by `check_in_range` at either end and by `wrap_to_range` at its max)
+- feat: `is_within_bounds<QP>(q, origin)` and `try_make<QP>(q, origin)` added for points
+        with a checking policy or without bounds (`try_make` returns
+        `std::expected<QP, bounds_violation>`)
 - feat: `quantity_from_unit_zero()` member function added (replaces `quantity_from_zero()`)
 - feat: `numerical_value_in(Unit)` and `force_numerical_value_in(Unit)` member functions
         added to `quantity_point` (extract the raw value of a default-origin point; the

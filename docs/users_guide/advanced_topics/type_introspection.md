@@ -26,23 +26,43 @@ Like other symbolic constants (units, references, point origins), a `quantity_sp
 expose public static data members. Its metadata is obtained through non-member functions:
 
 - `get_dimension(qs)` - extracts the dimension
-- `get_character(qs)` - extracts the character, a pair of `order` (scalar, vector, tensor)
-  and `field` (real, complex) axes
 
 !!! example
 
     ```cpp
     static_assert(get_dimension(isq::length) == isq::dim_length);
-    static_assert(get_character(isq::length) == quantity_character{});
-
     static_assert(get_dimension(isq::velocity) == isq::dim_length / isq::dim_time);
-    static_assert(get_character(isq::velocity) == quantity_character{quantity_tensor_order::vector});
-
-    // the character is a pair of orthogonal axes, each queryable on its own
-    static_assert(get_character(isq::length).order == quantity_tensor_order::scalar);
-    static_assert(get_character(isq::length).field == quantity_field::real);
-    static_assert(get_character(isq::velocity).order == quantity_tensor_order::vector);
     ```
+
+A quantity's [character](../framework_basics/character_of_a_quantity.md) isn't available
+as a value. To ask about it, hand [`QuantityOf`](concepts.md#QuantityOf) a character in
+place of a specification:
+
+!!! example
+
+    ```cpp
+    using enum quantity_tensor_order;
+
+    static_assert(QuantityOf<quantity<isq::speed[m / s], double>, scalar>);
+    static_assert(QuantityOf<quantity<isq::velocity[m / s], double>, vector>);   // a 1D velocity
+    static_assert(QuantityOf<quantity<isq::velocity[m / s], cartesian_vector<double>>, vector>);
+    static_assert(QuantityOf<quantity<isq::stress[Pa], cartesian_tensor<double>>, tensor>);
+    static_assert(QuantityOf<quantity<V, std::complex<double>>, quantity_field::complex>);
+    ```
+
+A concrete _quantity spec_ has one character, but a
+[quantity kind](../framework_basics/systems_of_quantities.md) admits every character, and
+only the representation can restrict it. A [simple
+quantity](../framework_basics/simple_and_typed_quantities.md) is of a kind too, since its
+spec is the `kind_of<…>` its unit yields. Both quantities below are of the kind of `m / s`:
+
+```cpp
+const quantity a = cartesian_vector{3.0, 4.0, 0.0} * m / s;   // a vector representation
+const quantity b = cartesian_tensor<double>{} * m / s;        // a tensor representation
+```
+
+See [`QuantityOf`](concepts.md#QuantityOf) for how the spec and the representation
+combine.
 
 
 ## `unit` and `Reference`

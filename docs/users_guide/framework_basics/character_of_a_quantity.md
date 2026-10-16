@@ -210,6 +210,75 @@ _voltage phasor_ shares everything with _voltage_ but is complex rather than rea
     ```
 
 
+## A quantity kind admits every character
+
+Every *concrete* quantity spec has one character, as declared above. A
+[quantity kind](systems_of_quantities.md) admits every character, because a kind covers
+its whole quantity tree. The _length_ kind holds scalars like _radius_, _width_, _height_,
+but also vectors like _displacement_ and _position vector_. Similarly _speed_ kind holds both
+the scalar _speed_ and the vector _velocity_. No single character can describe such kinds:
+
+```cpp
+static_assert(get_kind(isq::velocity) == get_kind(isq::speed));   // one kind, two characters
+```
+
+A [simple quantity](simple_and_typed_quantities.md) is of a kind as well, since the spec
+its unit yields is a `kind_of<…>`:
+
+```cpp
+const quantity a = 30.0 * km / h;                               // a scalar representation
+const quantity b = cartesian_vector{30.0, 40.0, 0.0} * km / h;  // a vector representation
+const quantity c = cartesian_tensor<double>{} * km / h;         // a tensor representation
+```
+
+All three are quantities of the same kind, and only the representation can restrict the
+character a kind admits. A kind stored in a scalar representation such as `double` admits
+every order.
+
+## Asking what a quantity is
+
+To find out whether a quantity is a scalar, a vector, or a tensor, ask
+[`QuantityOf`](../advanced_topics/concepts.md#QuantityOf) with a character in place of a
+specification. The answer weighs the spec together with the representation:
+
+```cpp
+using enum quantity_tensor_order;
+
+static_assert(QuantityOf<quantity<isq::speed[m / s], double>, scalar>);
+static_assert(!QuantityOf<quantity<isq::speed[m / s], double>, vector>);   // a speed is never a vector
+
+static_assert(QuantityOf<quantity<isq::velocity[m / s], double>, vector>);  // a 1D velocity
+static_assert(QuantityOf<quantity<isq::velocity[m / s], cartesian_vector<double>>, vector>);
+static_assert(QuantityOf<quantity<isq::stress[Pa], cartesian_tensor<double>>, tensor>);
+
+static_assert(QuantityOf<quantity<km / h, cartesian_vector<double>>, vector>);   // a kind: the rep restricts it
+static_assert(QuantityOf<quantity<km / h, cartesian_tensor<double>>, tensor>);
+
+static_assert(QuantityOf<quantity<isq::speed[m / s], double>, quantity_field::real>);
+static_assert(QuantityOf<quantity<V, std::complex<double>>, quantity_field::complex>);
+```
+
+A 1D _velocity_ stored in a `double` is a vector quantity with a single component,
+because a scalar representation can fill a vector slot. A concrete spec such as
+`isq::speed` stays a scalar whatever its representation.
+[`QuantityOf`](../advanced_topics/concepts.md#QuantityOf) describes the rules in detail. A
+_quantity point_ asks [`QuantityPointOf`](../advanced_topics/concepts.md#QuantityPointOf)
+the same way, since a _point_ isn't a `Quantity`.
+
+The library asks the same question to decide which operations exist. `magnitude()` exists
+when the quantity may be a vector or a tensor and its representation can produce a norm.
+This includes a quantity of a kind stored in a `double`, so `(5. * m).magnitude()`
+compiles. It never exists on a quantity whose spec is a concrete scalar such as
+`isq::speed`:
+
+```cpp
+const quantity v = isq::velocity(cartesian_vector{3.0, 4.0, 0.0} * m / s);
+const quantity speed = v.magnitude();               // 5 m/s
+
+const quantity s = 30.0 * isq::speed[m / s];
+// auto nonsense = s.magnitude();                   // error: a speed is a concrete scalar
+```
+
 ## Representation types for vector and tensor quantities
 
 The `quantity` class template's second parameter is constrained with
@@ -238,19 +307,6 @@ For example, using the built-in `cartesian_vector`:
 
 Quantity auto q = cartesian_vector{1., 2., 3.} * isq::velocity[m / s];
 ```
-
-!!! note
-
-    The following does not work:
-
-    ```cpp
-    Quantity auto q1 = cartesian_vector{1., 2., 3.} * m / s;
-    Quantity auto q2 = isq::velocity(cartesian_vector{1., 2., 3.} * m / s);
-    quantity<isq::velocity[m/s]> q3{cartesian_vector{1., 2., 3.} * m / s};
-    ```
-
-    In all the cases above, the SI unit `m / s` has an associated scalar quantity of `isq::length / isq::duration`.
-    `cartesian_vector` is not a correct representation type for a scalar quantity so the construction fails.
 
 A _tensor quantity_ works the same way through the built-in `cartesian_tensor`, an
 `N`×`N` second-order Cartesian tensor:

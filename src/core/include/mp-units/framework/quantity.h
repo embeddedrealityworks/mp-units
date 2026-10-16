@@ -107,7 +107,8 @@ concept ImplicitConversion = ExplicitlyCastable<FromUnit, ToUnit, ToRep> &&
 
 template<typename QTo, typename QFrom>
 concept QuantityConstructibleFrom =
-  Quantity<QTo> && Quantity<QFrom> && mp_units::explicitly_convertible(QFrom::quantity_spec, QTo::quantity_spec) &&
+  Quantity<QTo> && Quantity<QFrom> &&
+  mp_units::utility::explicitly_convertible(QFrom::quantity_spec, QTo::quantity_spec) &&
   RepConstructibleFrom<typename QTo::rep, typename QFrom::rep> &&
   ImplicitConversion<QFrom::unit, typename QFrom::rep, QTo::unit, typename QTo::rep>;
 
@@ -123,11 +124,12 @@ concept UnitOne = Reference<MP_UNITS_NTTP_HACK(decltype(R))> &&
                   (equivalent(get_unit(R), one) && detail::get_associated_quantity(get_unit(R)) == dimensionless);
 
 template<auto R>
-concept ExplicitFromNumber = UnitOne<R> && (mp_units::explicitly_convertible(get_quantity_spec(R), dimensionless));
+concept ExplicitFromNumber =
+  UnitOne<R> && (mp_units::utility::explicitly_convertible(get_quantity_spec(R), dimensionless));
 
 template<auto R>
 concept ImplicitFromNumber =
-  ExplicitFromNumber<R> && (mp_units::implicitly_convertible(get_quantity_spec(R), dimensionless));
+  ExplicitFromNumber<R> && (mp_units::utility::implicitly_convertible(get_quantity_spec(R), dimensionless));
 
 template<typename Q>
 concept ImplicitFromNumberQuantity = Quantity<Q> && ImplicitFromNumber<Q::reference>;
@@ -160,7 +162,7 @@ concept OrderRaisingRepresentation = requires { requires tensor_order<T> >= 1; }
 // a real->complex field mismatch is not bridged either.
 template<auto QS>
 concept ScalarCharacterSpec =
-  QuantitySpec<MP_UNITS_NTTP_HACK(decltype(QS))> && (get_character(QS).order == quantity_tensor_order::scalar);
+  QuantitySpec<MP_UNITS_NTTP_HACK(decltype(QS))> && admits(admitted_character(QS).order, quantity_tensor_order::scalar);
 
 template<auto QS, typename Func, typename T, typename U>
 concept ScalableResultOf =
@@ -537,13 +539,14 @@ struct quantity_iface {
     return lhs.numerical_value_ref_in(get_unit(R1)) <=> representation_values<Rep1>::zero();
   }
 
-  // tuple-like decomposition of a vector quantity into named 1D-vector components (see
-  // framework/vector_components.h).
+  // tuple-like decomposition of a vector quantity into 1D-vector components (see
+  // framework/vector_components.h). A component carries its declared axis spec when the whole
+  // declares its axes, and the whole's kind otherwise.
   template<std::size_t Idx, auto R1, typename Rep1>
     requires DecomposableIndex<get_quantity_spec(R1), Rep1, Idx>
   [[nodiscard]] friend constexpr Quantity auto get(const quantity<R1, Rep1>& q)
   {
-    constexpr auto comp = vector_components<get_quantity_spec(R1)>::template axis<Idx>;
+    constexpr auto comp = component_spec<get_quantity_spec(R1), Rep1, Idx>();
     return component_access<Idx>(q.numerical_value_in(get_unit(R1))) * comp[get_unit(R1)];
   }
 
@@ -574,6 +577,72 @@ struct quantity_iface {
 #endif  // MP_UNITS_HOSTED
 };
 
+// Component-wise construction of a vector quantity from its component quantities, the inverse of the
+// decomposition above and available in both of its modes, so that what `get` takes apart can be put
+// back together. Declaring the axes upgrades what is checked, exactly as it does for decomposition:
+// each argument is then matched against the spec declared for its position rather than against the
+// whole's own spec.
+
+// The quantity type of the `Idx`-th component: what the component-wise constructor accepts in that
+// position, in the whole's unit and over the representation's element type.
+template<auto R, typename Rep, std::size_t Idx>
+using component_quantity = quantity<component_spec<get_quantity_spec(R), Rep, Idx>()[get_unit(R)], value_type_t<Rep>>;
+
+// The element type each component contributes, spelled per index so that the pack can be expanded
+// once per component.
+template<std::size_t, typename T>
+using component_element_type = T;
+
+// Every argument is implicitly convertible to the component quantity of its position. That single
+// rule is what makes a swapped pair of axis-typed arguments ill-formed, and it deliberately goes no
+// further: a quantity kind converts into every quantity of its hierarchy, so a unit-only argument
+// such as `30 * km / h` fits every position and any order of those compiles. Refusing one here would
+// make this the only place in the library that second-guesses that conversion, and reaching for a
+// kind quantity is the documented way to opt out of kind safety. The argument pack and the index pack
+// have equal length (guaranteed by the count check in `ComposableFrom`), so the fold expands them in
+// lockstep.
+template<auto R, typename Rep, typename... Qs, std::size_t... Idxs>
+[[nodiscard]] consteval bool axis_quantities_convertible(std::index_sequence<Idxs...>)
+{
+  return (... && std::convertible_to<Qs, component_quantity<R, Rep, Idxs>>);
+}
+
+// The representation can be built from one element value per component. This asks for *braced*
+// initialization, which is what `compose_representation` below performs, rather than
+// `std::constructible_from`: that concept spells parenthesized direct-initialization, which does not
+// see a vector type whose only element-wise constructor takes an `initializer_list`
+// (`blaze::StaticVector` is one). Asking the narrower question would leave such a backend able to
+// decompose but not to recompose, and the two directions are meant to close on each other.
+template<typename Rep, std::size_t... Idxs>
+[[nodiscard]] consteval bool rep_constructible_from_elements(std::index_sequence<Idxs...>)
+{
+  return requires(component_element_type<Idxs, value_type_t<Rep>>... elems) { Rep{elems...}; };
+}
+
+// The two-argument floor keeps this away from the one-argument constructors above, which a
+// single-element representation would otherwise collide with. A declared decomposition always has at
+// least two axes, so the floor only ever bites an undeclared one.
+//
+// The order of the conjunction is deliberate. This constructor is a candidate for every construction
+// of a quantity, including the `{value, reference}` shape behind `42 * m`, so the two checks that
+// depend only on the argument count and the representation come first: they are decided once per
+// representation type and argument count, whereas the decomposition checks are decided once per
+// quantity type.
+template<auto R, typename Rep, typename... Qs>
+concept ComposableFrom =
+  (sizeof...(Qs) >= 2) && rep_constructible_from_elements<Rep>(std::index_sequence_for<Qs...>{}) &&
+  Decomposable<get_quantity_spec(R), Rep> && (sizeof...(Qs) == decomposition_size<get_quantity_spec(R), Rep>()) &&
+  axis_quantities_convertible<R, Rep, Qs...>(std::index_sequence_for<Qs...>{});
+
+// Materializes the representation from the component quantities. Each argument is converted to its
+// position's component quantity type first, which is where the unit conversion and the axis check
+// happen, and only then handed to the representation as a plain element value.
+template<auto R, typename Rep, std::size_t... Idxs, typename... Qs>
+[[nodiscard]] constexpr Rep compose_representation(std::index_sequence<Idxs...>, const Qs&... qs)
+{
+  return Rep{component_quantity<R, Rep, Idxs>{qs}.numerical_value_in(get_unit(R))...};
+}
+
 }  // namespace detail
 
 MP_UNITS_EXPORT_BEGIN
@@ -596,7 +665,15 @@ public:
   static constexpr Reference auto reference = R;
   static constexpr QuantitySpec auto quantity_spec = get_quantity_spec(reference);
   static constexpr Dimension auto dimension = get_dimension(quantity_spec);
-  static constexpr quantity_character character = get_character(quantity_spec);
+#if !MP_UNITS_EAGER_STATIC_MEMBER_INIT_HACK
+  // Deprecated in 2.6.0. Ill-formed for a quantity kind, which admits every character. Omitted on MSVC up to
+  // 19.51 (see `MP_UNITS_EAGER_STATIC_MEMBER_INIT_HACK`).
+  [[deprecated(
+    "2.6.0: a quantity's character is no longer a value to inspect; ask "
+    "`QuantityOf<Q, quantity_tensor_order::vector>`, `QuantityOf<Q, quantity_field::complex>`, or "
+    "another character instead")]] static constexpr quantity_character character =
+    detail::definite_character<detail::admitted_character(quantity_spec)>();
+#endif
   static constexpr Unit auto unit = get_unit(reference);
   using rep = Rep;
 
@@ -645,7 +722,8 @@ public:
   {
   }
 
-  [[nodiscard]] constexpr explicit(!mp_units::implicitly_convertible(quantity_spec, dimensionless)) quantity(rep val)
+  [[nodiscard]] constexpr explicit(!mp_units::utility::implicitly_convertible(quantity_spec, dimensionless))
+    quantity(rep val)
     requires detail::ExplicitFromNumber<reference>
       : numerical_value_is_an_implementation_detail_(std::move(val))
   {
@@ -661,18 +739,32 @@ public:
   template<typename Value>
     requires detail::ExplicitFromNumber<reference> && (!detail::RepConstructibleFrom<rep, Value>)
   constexpr explicit(!std::convertible_to<Value, rep> ||
-                     !mp_units::implicitly_convertible(quantity_spec, dimensionless)) quantity(Value val)
+                     !mp_units::utility::implicitly_convertible(quantity_spec, dimensionless)) quantity(Value val)
 #if MP_UNITS_HAS_DELETED_FUNCTION_MESSAGE
     = delete ("Conversion is truncating");
 #else
     = delete;
 #endif
 
+  // Component-wise construction from the component quantities of a decomposition (see
+  // framework/vector_components.h). This type pins the unit, so every argument is converted into it
+  // under the ordinary conversion rules. Each argument must convert to the component quantity of its
+  // position: the declared axis when the whole declares its axes, which is what makes a swapped pair
+  // of arguments a compile-time error, and the whole's kind otherwise. `ComposableFrom` asks for at
+  // least two arguments, so this never competes with the one-argument constructors above.
+  template<typename... Qs>
+    requires detail::ComposableFrom<reference, rep, Qs...>
+  [[nodiscard]] constexpr quantity(const Qs&... qs) :
+      numerical_value_is_an_implementation_detail_(
+        detail::compose_representation<reference, rep>(std::index_sequence_for<Qs...>{}, qs...))
+  {
+  }
+
   template<auto R2, typename Rep2>
     requires detail::QuantityConstructibleFrom<quantity, quantity<R2, Rep2>> && (equivalent(unit, get_unit(R2)))
   // NOLINTNEXTLINE(google-explicit-constructor, hicpp-explicit-conversions)
   [[nodiscard]] constexpr explicit(!std::convertible_to<Rep2, rep> ||
-                                   !mp_units::implicitly_convertible(get_quantity_spec(R2), quantity_spec) ||
+                                   !mp_units::utility::implicitly_convertible(get_quantity_spec(R2), quantity_spec) ||
                                    !mp_units::implicitly_scalable<get_unit(R2), Rep2, unit, rep>)
     quantity(const quantity<R2, Rep2>& q) :
       // the units are equivalent, so the stored value is already the value in `unit`. `q`'s unit
@@ -687,7 +779,7 @@ public:
     requires detail::QuantityConstructibleFrom<quantity, quantity<R2, Rep2>> && (!equivalent(unit, get_unit(R2)))
   // NOLINTNEXTLINE(google-explicit-constructor, hicpp-explicit-conversions)
   [[nodiscard]] constexpr explicit(!std::convertible_to<Rep2, rep> ||
-                                   !mp_units::implicitly_convertible(get_quantity_spec(R2), quantity_spec) ||
+                                   !mp_units::utility::implicitly_convertible(get_quantity_spec(R2), quantity_spec) ||
                                    !mp_units::implicitly_scalable<get_unit(R2), Rep2, unit, rep>)
     quantity(const quantity<R2, Rep2>& q) :
       quantity(detail::sudo_cast<quantity>(q))
@@ -791,7 +883,11 @@ public:
   // built from scalar base units (e.g. `km/h`); for one tied to a vector spec (e.g. `N`) the result
   // keeps `vector` character, so one could even take the magnitude of a magnitude. A known V2 limitation.
   [[nodiscard]] constexpr Quantity auto magnitude() const
-    requires(get_character(quantity_spec).order >= quantity_tensor_order::vector) && detail::HasMagnitude<rep>
+    // Only a quantity that may be a vector or a tensor gets a magnitude (a kind quantity in a `double`
+    // qualifies), and its representation has to be able to produce one.
+    requires(QuantityOf<quantity, quantity_tensor_order::vector> ||
+             QuantityOf<quantity, quantity_tensor_order::tensor>) &&
+            detail::HasMagnitude<rep>
   {
     return ::mp_units::magnitude(numerical_value_is_an_implementation_detail_) * unit;
   }
@@ -917,7 +1013,7 @@ public:
 
   // compound assignment operators
   template<auto R2, typename Rep2>
-    requires(mp_units::implicitly_convertible(get_quantity_spec(R2), quantity_spec)) &&
+    requires(mp_units::utility::implicitly_convertible(get_quantity_spec(R2), quantity_spec)) &&
             detail::ImplicitConversion<get_unit(R2), Rep2, unit, rep> && requires(rep& a, const Rep2 b) {
               { a += b } -> std::same_as<rep&>;
             }
@@ -931,7 +1027,7 @@ public:
   }
 
   template<auto R2, typename Rep2>
-    requires(mp_units::implicitly_convertible(get_quantity_spec(R2), quantity_spec)) &&
+    requires(mp_units::utility::implicitly_convertible(get_quantity_spec(R2), quantity_spec)) &&
             detail::ImplicitConversion<get_unit(R2), Rep2, unit, rep> && requires(rep& a, const Rep2 b) {
               { a -= b } -> std::same_as<rep&>;
             }
@@ -946,7 +1042,7 @@ public:
 
   template<auto R2, typename Rep2>
     requires(!treat_as_floating_point<rep>) &&
-            (mp_units::implicitly_convertible(get_quantity_spec(R2), quantity_spec)) &&
+            (mp_units::utility::implicitly_convertible(get_quantity_spec(R2), quantity_spec)) &&
             detail::ImplicitConversion<get_unit(R2), Rep2, unit, rep> && requires(rep& a, const Rep2 b) {
               { a %= b } -> std::same_as<rep&>;
             }
@@ -1033,7 +1129,7 @@ template<QuantitySpec auto QS, typename FwdValue>
 template<auto R, typename Rep>
   requires mp_units::detail::Decomposable<get_quantity_spec(R), Rep>
 struct std::tuple_size<mp_units::quantity<R, Rep>> :
-    std::integral_constant<std::size_t, mp_units::vector_components<get_quantity_spec(R)>::size> {};
+    std::integral_constant<std::size_t, mp_units::detail::decomposition_size<get_quantity_spec(R), Rep>()> {};
 
 template<std::size_t Idx, auto R, typename Rep>
   requires mp_units::detail::DecomposableIndex<get_quantity_spec(R), Rep, Idx>

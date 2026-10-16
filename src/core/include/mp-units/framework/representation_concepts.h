@@ -331,17 +331,44 @@ concept HasMagnitude = requires(const T& v) {
 };
 
 // The order axis as rank-ordered character concepts: a `Scalar` is also a degenerate `Vector` and
-// `Tensor`, and a `Vector` a degenerate `Tensor` (ISO 80000-2:2019, 18). `Scalar` carries the
+// `Tensor`, and a `Vector` a degenerate `Tensor` (clause 18 of ISO 80000-2:2019). `Scalar` carries the
 // per-field element algebra; an order >= 1 representation adds regular addition and an L2 magnitude
 // (its element contracts are then enforced by the container type itself, e.g.
 // `cartesian_vector<detail::Scalar T>`). These deliberately omit the representation-validity checks
-// (`disable_representation`, `UnitMagnitudeScalable`) so that in V3 they also classify a quantity by
-// its character.
+// (`disable_representation`, `UnitMagnitudeScalable`) so that they can also classify a quantity by its
+// character.
+//
+// The nesting makes each concept *subsume* the next, so an overload constrained on
+// `ScalarRepresentation` is preferred over one constrained on `VectorRepresentation` for a scalar
+// type. That is why the order rule lives in these concepts: a flag set is a value, and values don't
+// subsume. The mask below is derived from them.
 template<typename T>
-concept Vector = Scalar<T> || (tensor_order<T> == 1 && RegularAddable<T> && HasMagnitude<T>);
+concept Vector = Scalar<T> || (requires { requires tensor_order<T> == 1; } && RegularAddable<T> && HasMagnitude<T>);
 
 template<typename T>
-concept Tensor = Vector<T> || (tensor_order<T> == 2 && RegularAddable<T> && HasMagnitude<T>);
+concept Tensor = Vector<T> || (requires { requires tensor_order<T> == 2; } && RegularAddable<T> && HasMagnitude<T>);
+
+// The characters a representation can fill, read off the concepts above. On the order axis a scalar
+// fills every slot, a vector fills vector and tensor, a tensor only tensor. The library applies no
+// such degeneracy on the field axis, so a representation names a single field flag (or none, for a
+// type whose field is unspecified).
+//
+// The work is done by a function and the result is held in a variable template, so the mask is
+// computed once per type however many axes ask for it. The computation is not a `consteval` lambda
+// in the initializer, because Clang 16 rejects the flag operators inside one.
+template<typename T>
+[[nodiscard]] consteval character_mask compute_representable_character()
+{
+  character_mask result{order_flags{}, field_flags{}};
+  if constexpr (Scalar<T>) result.order = result.order | to_flags(quantity_tensor_order::scalar);
+  if constexpr (Vector<T>) result.order = result.order | to_flags(quantity_tensor_order::vector);
+  if constexpr (Tensor<T>) result.order = result.order | to_flags(quantity_tensor_order::tensor);
+  if constexpr (utility::specified<decltype(numeric_field<T>)>) result.field = to_flags(numeric_field<T>);
+  return result;
+}
+
+template<typename T>
+constexpr character_mask representable_character = compute_representable_character<T>();
 
 // A representation is a character that is also valid `quantity` storage: it is not opted out of
 // being a representation (`disable_representation`) and the library can scale it by a unit magnitude.
@@ -371,53 +398,37 @@ concept TensorRepresentation = RepresentationBaseline<T> && Tensor<T>;
 template<typename T>
 concept SomeRepresentation = TensorRepresentation<T>;
 
-// The two matching axes. Order is rank-ordered: `T` fills a slot of equal-or-higher order. Field is
-// disjoint and matched exactly: a real quantity needs a real representation and a complex one a
-// complex representation.
-template<typename T, quantity_tensor_order Order>
-concept RepresentationOfOrder = (Order == quantity_tensor_order::scalar && ScalarRepresentation<T>) ||
-                                (Order == quantity_tensor_order::vector && VectorRepresentation<T>) ||
-                                (Order == quantity_tensor_order::tensor && TensorRepresentation<T>);
-
-template<typename T, quantity_field Field>
-concept RepresentationOfField = SomeRepresentation<T> && (numeric_field<T> == Field);
-
-[[nodiscard]] consteval quantity_tensor_order order_of(quantity_character ch) { return ch.order; }
-[[nodiscard]] consteval quantity_field field_of(quantity_character ch) { return ch.field; }
-
-// Match a representation `T` against a character `V`: a bare axis constrains only its own
-// axis (the other is free), a full `quantity_character` (or the legacy flat enum) constrains both.
+// What a `RepresentationOf` argument may be: a quantity specification or a character value.
 MP_UNITS_DIAGNOSTIC_PUSH
 MP_UNITS_DIAGNOSTIC_IGNORE_DEPRECATED
-template<typename T, auto V>
-concept RepresentationOfCharacter =
-  (std::same_as<MP_UNITS_NTTP_HACK(decltype(V)), quantity_tensor_order> && RepresentationOfOrder<T, V>) ||
-  (std::same_as<MP_UNITS_NTTP_HACK(decltype(V)), quantity_field> && RepresentationOfField<T, V>) ||
-  ((std::same_as<MP_UNITS_NTTP_HACK(decltype(V)), quantity_character> ||
-    std::same_as<MP_UNITS_NTTP_HACK(decltype(V)), quantity_character_legacy>) &&
-   RepresentationOfOrder<T, order_of(V)> && RepresentationOfField<T, field_of(V)>);
+template<auto V>
+concept CharacterConstraint = QuantitySpec<MP_UNITS_NTTP_HACK(decltype(V))> || CharacterValue<V>;
+
+// A representation has no quantity tree, so a specification stands only for the character it admits.
+// A quantity kind admits every character, so it needs no special case.
+template<auto V>
+  requires CharacterConstraint<V>
+[[nodiscard]] consteval character_mask character_constraint()
+{
+  if constexpr (QuantitySpec<MP_UNITS_NTTP_HACK(decltype(V))>)
+    return admitted_character(V);
+  else
+    return axis_mask<V>();
+}
 MP_UNITS_DIAGNOSTIC_POP
 
 }  // namespace detail
 
-#ifdef MP_UNITS_XCODE15_HACKS
+// Matching is one intersection per axis: the slots the representation can fill have to meet the
+// orders the constraint admits, and likewise for the field.
+//
+// `SomeRepresentation<T>` leads the conjunction so that a non-representation (in particular a
+// `quantity`, which `disable_representation` rejects) never reaches the character machinery. The
+// `CharacterConstraint<V>` guard follows, so a non-character fails early on the guard.
 MP_UNITS_EXPORT template<typename T, auto V>
 concept RepresentationOf =
-  detail::SomeRepresentation<T> && ((QuantitySpec<MP_UNITS_NTTP_HACK(decltype(V))> &&
-                                     (detail::QuantityKindSpec<MP_UNITS_NTTP_HACK(decltype(V))> ||
-                                      (detail::RepresentationOfOrder<T, detail::order_of(get_character(V))> &&
-                                       detail::RepresentationOfField<T, detail::field_of(get_character(V))>))) ||
-                                    detail::RepresentationOfCharacter<T, V>);
-
-#else
-
-MP_UNITS_EXPORT template<typename T, auto V>
-concept RepresentationOf =
-  (QuantitySpec<MP_UNITS_NTTP_HACK(decltype(V))> &&
-   ((detail::QuantityKindSpec<MP_UNITS_NTTP_HACK(decltype(V))> && detail::SomeRepresentation<T>) ||
-    (detail::RepresentationOfOrder<T, detail::order_of(get_character(V))> &&
-     detail::RepresentationOfField<T, detail::field_of(get_character(V))>))) ||
-  detail::RepresentationOfCharacter<T, V>;
-#endif
+  detail::SomeRepresentation<T> && detail::CharacterConstraint<V> &&
+  detail::overlaps(detail::representable_character<T>.order, detail::character_constraint<V>().order) &&
+  detail::overlaps(detail::representable_character<T>.field, detail::character_constraint<V>().field);
 
 }  // namespace mp_units

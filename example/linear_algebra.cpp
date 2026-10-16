@@ -129,9 +129,13 @@ struct mp_units::vector_components<flight_velocity> :
 
 namespace {
 
-// A vector quantity is printed as bracketed components, a scalar quantity as a plain value.
+// The representation decides the bracketing: a 1D velocity stored in a `double` is a vector quantity
+// with a single value.
+template<typename Q>
+concept has_vector_components = requires { requires tensor_order<typename Q::rep> == 1; };
+
 template<Quantity Q>
-  requires(Q::character == quantity_character{quantity_tensor_order::vector})
+  requires has_vector_components<Q>
 void print(std::string_view name, const Q& q)
 {
   const auto& v = q.numerical_value_in(q.unit);
@@ -139,7 +143,7 @@ void print(std::string_view name, const Q& q)
 }
 
 template<Quantity Q>
-  requires(Q::character != quantity_character{quantity_tensor_order::vector})
+  requires(!has_vector_components<Q>)
 void print(std::string_view name, const Q& q)
 {
   std::cout << name << " = " << q << "\n";

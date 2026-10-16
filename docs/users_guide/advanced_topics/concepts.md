@@ -52,8 +52,21 @@ concept and when they compare equal.
 
 ### `QuantitySpecOf<T, V>` { #QuantitySpecOf }
 
-`QuantitySpecOf` concept is satisfied when both arguments satisfy a
-[`QuantitySpec`](#QuantitySpec) concept and when `T` is implicitly convertible to `V`.
+`QuantitySpecOf` concept is satisfied when `T` satisfies a [`QuantitySpec`](#QuantitySpec)
+concept and matches the following value `V`:
+
+| `V`            | Condition                                  |
+|----------------|--------------------------------------------|
+| `QuantitySpec` | `T` is implicitly convertible to `V`.      |
+| a character    | `T` **admits** the character named by `V`. |
+
+A character is a bare `quantity_tensor_order`, a bare `quantity_field`, or a full
+`quantity_character`. A concrete specification admits exactly one character. A
+[quantity kind](../../reference/glossary.md#kind) admits every character, because a
+_quantity_ of that kind may hold any.
+
+Ask this where no _quantity_ exists yet to ask [`QuantityOf`](#QuantityOf) about,
+such as constraining a _reference_ taken as a template parameter.
 
 
 ## `UnitMagnitude<T>` { #UnitMagnitude }
@@ -135,6 +148,9 @@ A `Reference` can either be:
 `ReferenceOf` concept is satisfied by references `T` which have a quantity specification
 that satisfies [`QuantitySpecOf<V>`](#QuantitySpecOf) concept.
 
+`V` may also be a character. A _reference_ has no representation, so only its
+specification is asked. To ask about a _quantity_, use [`QuantityOf`](#QuantityOf).
+
 
 ## `RepresentationOf<T, V>` { #RepresentationOf }
 
@@ -161,15 +177,12 @@ matched on two independent axes: the **field** (real or complex, reported by the
 vector, or tensor, reported by the [`tensor_order<T>`](representation_types.md#tensor_order)
 trait):
 
-- if the type of `V` satisfies [`QuantitySpec`](#QuantitySpec):
-
-    - by all representation types when `V` describes
-      a [quantity kind](../../reference/glossary.md#kind),
-    - otherwise, by representation types whose field and order match the
-      [character](../../reference/glossary.md#character) of `V`.
-
+- if the type of `V` satisfies [`QuantitySpec`](#QuantitySpec): by representation types
+  whose field and order match the [character](../../reference/glossary.md#character) `V`
+  admits. A [quantity kind](../../reference/glossary.md#kind) admits every character, so
+  every representation type matches a kind.
 - if `V` is a `quantity_character`, or a bare `quantity_tensor_order` or `quantity_field`
-  axis: by representation types matching the stated axis (or both axes).
+  axis: by representation types matching the stated axis, with the other axis left free.
 
 Field matching is **exact**: a real quantity needs a real representation and a complex quantity
 a complex one. Order matching is **rank-ordered**: a lower-order representation fills a
@@ -178,6 +191,9 @@ quantity.
 
 See [Representation Types](representation_types.md) for the full requirements and available
 customization points.
+
+To ask about a _quantity_, pass the same character to [`QuantityOf`](#QuantityOf), which
+weighs the specification and the representation together.
 
 
 ## `Quantity<T>` { #Quantity }
@@ -189,8 +205,48 @@ customization points.
 
 ### `QuantityOf<T, V>` { #QuantityOf }
 
-`QuantityOf` concept is satisfied by all the quantities for which a [`ReferenceOf<V>`](#ReferenceOf)
-is `true`.
+`QuantityOf` concept is satisfied by all the quantities `T` that match the following
+value `V`:
+
+| `V`            | Condition                                                                               |
+|----------------|-----------------------------------------------------------------------------------------|
+| `QuantitySpec` | The quantity reference satisfies [`ReferenceOf<V>`](#ReferenceOf) concept.              |
+| a character    | `T`'s specification admits that character **and** its representation can fill the slot. |
+
+A character is a bare `quantity_tensor_order`, a bare `quantity_field`, or a full
+`quantity_character`. The two readings are guarded by disjoint argument types, so a
+specification argument keeps its quantity-tree meaning.
+
+The character reading needs both halves. A
+[quantity kind](../../reference/glossary.md#kind) admits every character, so only its
+representation can restrict it. A `double` fills every order slot, so it can't say what
+the quantity is on its own.
+
+The representation half is rank-ordered. The library lets a scalar representation fill a
+vector or a tensor slot and a vector one fill a tensor slot, generalizing clause 18 of
+ISO 80000-2:2019. This is why a 1D _velocity_ stored in a `double` is a vector _quantity_.
+The specification half stays exact, so an `isq::speed` quantity is never a vector one,
+whatever its representation.
+
+```cpp
+static_assert(QuantityOf<quantity<isq::speed[m / s], double>, quantity_tensor_order::scalar>);
+static_assert(!QuantityOf<quantity<isq::speed[m / s], double>, quantity_tensor_order::vector>);
+static_assert(QuantityOf<quantity<isq::velocity[m / s], double>, quantity_tensor_order::vector>);
+static_assert(QuantityOf<quantity<isq::stress[Pa], cartesian_tensor<double>>, quantity_tensor_order::tensor>);
+static_assert(QuantityOf<quantity<km / h, cartesian_vector<double>>, quantity_tensor_order::vector>);  // a kind
+```
+
+A _quantity_ of a kind admits every order its representation fills, so it can satisfy
+several readings at once. One stored in a `double` matches `scalar`, `vector`, and
+`tensor`, and one stored in a `cartesian_vector<double>` matches `vector` and `tensor`.
+Overloads constrained on different orders are then ambiguous for it.
+
+The field axis isn't rank-ordered: a _quantity_ is either real or complex.
+
+```cpp
+static_assert(QuantityOf<quantity<isq::speed[m / s], double>, quantity_field::real>);
+static_assert(QuantityOf<quantity<V, std::complex<double>>, quantity_field::complex>);
+```
 
 
 ### `QuantityLike<T>` { #QuantityLike }
@@ -288,6 +344,15 @@ a
 |----------------|-----------------------------------------------------------------------------------------------|
 | `QuantitySpec` | The quantity point quantity specification satisfies [`ReferenceOf<V>`](#ReferenceOf) concept. |
 | `PointOrigin`  | The _point_ and `V` have the same absolute point origin.                                      |
+| a character    | The _point_ satisfies the condition [`QuantityOf<V>`](#QuantityOf) states for a _quantity_.   |
+
+A _point_ isn't a [`Quantity`](#Quantity), so [`QuantityOf`](#QuantityOf) can't be asked
+about one. A _point_ asks `QuantityPointOf` instead, and the answer agrees with the
+_quantity_ of the same _reference_ and representation.
+
+```cpp
+static_assert(QuantityPointOf<quantity_point<isq::velocity[m / s]>, quantity_tensor_order::vector>);
+```
 
 
 ### `QuantityPointLike<T>` { #QuantityPointLike }
