@@ -433,13 +433,27 @@ constexpr bool is_quantity_abstraction = false;
 
 // A specializable opt-out: when `true`, `T` is not accepted as a quantity representation by any
 // character. The default rejects a type that is, or whose elements are, a quantity abstraction (so a
-// bare quantity and a container of quantities are both excluded), and `bool` is opted out as well. A
-// custom type bars itself from ever being a representation with a one-line specialization.
+// bare quantity and a container of quantities are both excluded), and `bool` and the character types
+// are opted out as well. A custom type bars itself from ever being a representation with a one-line
+// specialization.
 MP_UNITS_EXPORT template<typename T>
 constexpr bool disable_representation = detail::is_quantity_abstraction<detail::value_type_t<T>>;
 
 template<>
 inline constexpr bool disable_representation<bool> = true;
+
+// A character type holds a character, not a number. `signed char` and `unsigned char` stay
+// representations, as `std::int8_t` and `std::uint8_t` name them.
+template<>
+inline constexpr bool disable_representation<char> = true;
+template<>
+inline constexpr bool disable_representation<wchar_t> = true;
+template<>
+inline constexpr bool disable_representation<char8_t> = true;
+template<>
+inline constexpr bool disable_representation<char16_t> = true;
+template<>
+inline constexpr bool disable_representation<char32_t> = true;
 
 // A representation carries a runtime value, which a stateless type cannot do. Rejecting empty tag
 // types here also short-circuits the whole representation-concept chain (`WeaklyRegular`, scaling,
@@ -609,16 +623,19 @@ template<typename T>
 struct quantity_point_like_traits;
 
 /**
- * @brief Opts a vector quantity into decomposition into named 1D-vector components
+ * @brief Opts a vector quantity into decomposition into named component vectors
  *
  * Specialize for a vector @c quantity_spec and inherit from @c vector_axes, listing the per-axis
  * quantity specs in coordinate order (see @c mp-units/framework/vector_components.h):
  *
  * @code
  * template<>
- * struct mp_units::vector_components<flight_velocity> :
+ * struct mp_units::component_vectors<flight_velocity> :
  *     mp_units::vector_axes<forward_velocity, wind_drift, sink_rate> {};
  * @endcode
+ *
+ * The name follows ISO 80000-2, which calls the vectors a1e1, a2e2, and a3e3 the component vectors
+ * of a vector a = a1e1 + a2e2 + a3e3, and a1, a2, and a3 its coordinates.
  *
  * Left undefined (the quantity is not decomposable) unless specialized. Only a concrete vector
  * quantity spec may be decomposed, so a specialization for a non-vector spec or for a `kind_of<>`
@@ -629,9 +646,20 @@ struct quantity_point_like_traits;
 // TODO Once point and delta quantity specs are introduced, exclude those here as well: an absolute
 // point or a delta is not decomposable into plain vector components.
 template<QuantitySpec auto QS>
-  requires(detail::admits(detail::admitted_character(QS).order, quantity_tensor_order::vector)) &&
+  requires(detail::admits(QS._character_.order, quantity_tensor_order::vector)) &&
           (!detail::QuantityKindSpec<MP_UNITS_NTTP_HACK(decltype(QS))>)
-struct vector_components;
+struct component_vectors;
+
+/**
+ * @brief The former name of @c component_vectors
+ *
+ * A specialization of it still declares the axes, and @c component_vectors takes precedence when
+ * both are specialized.
+ */
+template<QuantitySpec auto QS>
+  requires(detail::admits(QS._character_.order, quantity_tensor_order::vector)) &&
+          (!detail::QuantityKindSpec<MP_UNITS_NTTP_HACK(decltype(QS))>)
+struct [[deprecated("2.6.0: Use `component_vectors` instead")]] vector_components;
 
 MP_UNITS_EXPORT_END
 

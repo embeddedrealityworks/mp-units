@@ -33,6 +33,7 @@
 #include <mp-units/framework/customization_points.h>
 #include <mp-units/framework/dimension_concepts.h>
 #include <mp-units/framework/quantity_concepts.h>
+#include <mp-units/framework/quantity_point_concepts.h>
 #include <mp-units/framework/quantity_spec_concepts.h>
 #include <mp-units/framework/reference.h>
 #include <mp-units/framework/reference_concepts.h>
@@ -134,6 +135,15 @@ concept ImplicitFromNumber =
 template<typename Q>
 concept ImplicitFromNumberQuantity = Quantity<Q> && ImplicitFromNumber<Q::reference>;
 
+// The number operand of `+`, `-` and `%`. The comparisons keep the bare `ImplicitFromNumber`, because
+// `q == 0` on a dimensioned quantity is valid and evaluates it to false on the way to the `zero`
+// overload, so a sentence there would be a wrong diagnosis.
+template<auto R>
+concept ImplicitFromNumberOperand =
+  ImplicitFromNumber<R> ||
+  unsatisfied<"'{}' is not a dimensionless quantity in unit 'one', which a raw number operand requires">(
+    type_name(remove_kind(get_quantity_spec(R))));
+
 // The invocation result is canonicalized (see `representation_canonical_type`) so that
 // expression-template results (e.g. Eigen, Blaze) are checked and stored as their evaluated
 // concrete type rather than the lazy proxy type.
@@ -162,7 +172,7 @@ concept OrderRaisingRepresentation = requires { requires tensor_order<T> >= 1; }
 // a real->complex field mismatch is not bridged either.
 template<auto QS>
 concept ScalarCharacterSpec =
-  QuantitySpec<MP_UNITS_NTTP_HACK(decltype(QS))> && admits(admitted_character(QS).order, quantity_tensor_order::scalar);
+  QuantitySpec<MP_UNITS_NTTP_HACK(decltype(QS))> && admits(QS._character_.order, quantity_tensor_order::scalar);
 
 template<auto QS, typename Func, typename T, typename U>
 concept ScalableResultOf =
@@ -184,6 +194,21 @@ template<Reference auto R, typename Res>
     return get_kind(get_quantity_spec(R))[get_unit(R)];
 }
 
+// Quantities whose specifications have a common one, which is what adding, subtracting and comparing
+// them needs. Asked before the common reference is formed, so that `length + time` is reported in these
+// words rather than as an invalid call to `get_common_reference`. Only the two-quantity overloads of
+// the operators and `hypot` evaluate it, and only with operands that are the mistake, so the sentence
+// is not gated.
+template<auto QS1, auto QS2>
+concept QuantitySpecsOfTheSameKind =
+  have_common_quantity_spec(QS1, QS2) ||
+  unsatisfied<"'{}' and '{}' are quantities of different kinds and have no common quantity">(
+    type_name(remove_kind(QS1)), type_name(remove_kind(QS2)));
+
+template<typename Q1, typename Q2>
+concept QuantitiesOfTheSameKind =
+  Quantity<Q1> && Quantity<Q2> && QuantitySpecsOfTheSameKind<Q1::quantity_spec, Q2::quantity_spec>;
+
 template<auto R1, auto R2>
 concept HaveCommonReference = requires { mp_units::get_common_reference(R1, R2); };
 
@@ -199,12 +224,15 @@ template<typename Rep, Unit U1, Unit U2>
   return scaling_overflows_non_zero_values<Rep>(u1, cu) || scaling_overflows_non_zero_values<Rep>(u2, cu);
 }
 
+// `InvocableQuantities` precedes the conversions to the common quantity because it names the
+// representations that have no sum, whereas `common_quantity_for` would report an ill-formed
+// `std::invoke_result` for a vector added to a scalar.
 template<typename Func, typename Q1, typename Q2>
 concept CommonlyInvocableQuantities =
-  Quantity<Q1> && Quantity<Q2> && HaveCommonReference<Q1::reference, Q2::reference> &&
+  QuantitiesOfTheSameKind<Q1, Q2> && HaveCommonReference<Q1::reference, Q2::reference> &&
+  InvocableQuantities<Func, Q1, Q2, mp_units::get_common_quantity_spec(Q1::quantity_spec, Q2::quantity_spec)> &&
   std::convertible_to<Q1, common_quantity_for<Func, Q1, Q2>> &&
   std::convertible_to<Q2, common_quantity_for<Func, Q1, Q2>> &&
-  InvocableQuantities<Func, Q1, Q2, mp_units::get_common_quantity_spec(Q1::quantity_spec, Q2::quantity_spec)> &&
   !overflows_non_zero_common_values<
     representation_canonical_type_t<std::invoke_result_t<Func, typename Q1::rep, typename Q2::rep>>>(Q1::unit,
                                                                                                      Q2::unit);
@@ -226,7 +254,7 @@ template<typename Q1, typename Q2>
 
 template<typename Q1, typename Q2>
 concept CommonlyComparableQuantities =
-  Quantity<Q1> && Quantity<Q2> && HaveCommonReference<Q1::reference, Q2::reference> &&
+  QuantitiesOfTheSameKind<Q1, Q2> && HaveCommonReference<Q1::reference, Q2::reference> &&
   requires { typename std::common_type_t<Q1, Q2>; } && comparable_in_wide_type<Q1, Q2>();
 
 // Sign-aware integer comparisons with `std::cmp_less`/`std::cmp_equal` semantics.  Written by
@@ -365,14 +393,14 @@ struct quantity_iface {
   }
 
   template<auto R1, typename Rep1, RepresentationOf<get_quantity_spec(R1)> Value>
-    requires ImplicitFromNumber<R1> && InvokeResultOf<get_quantity_spec(R1), std::plus<>, Rep1, const Value&>
+    requires ImplicitFromNumberOperand<R1> && InvokeResultOf<get_quantity_spec(R1), std::plus<>, Rep1, const Value&>
   [[nodiscard]] friend constexpr Quantity auto operator+(const quantity<R1, Rep1>& lhs, const Value& rhs)
   {
     return lhs + quantity{rhs};
   }
 
   template<auto R1, typename Rep1, RepresentationOf<get_quantity_spec(R1)> Value>
-    requires ImplicitFromNumber<R1> && InvokeResultOf<get_quantity_spec(R1), std::plus<>, Rep1, const Value&>
+    requires ImplicitFromNumberOperand<R1> && InvokeResultOf<get_quantity_spec(R1), std::plus<>, Rep1, const Value&>
   [[nodiscard]] friend constexpr Quantity auto operator+(const Value& lhs, const quantity<R1, Rep1>& rhs)
   {
     return quantity{lhs} + rhs;
@@ -391,14 +419,14 @@ struct quantity_iface {
   }
 
   template<auto R1, typename Rep1, RepresentationOf<get_quantity_spec(R1)> Value>
-    requires ImplicitFromNumber<R1> && InvokeResultOf<get_quantity_spec(R1), std::minus<>, Rep1, const Value&>
+    requires ImplicitFromNumberOperand<R1> && InvokeResultOf<get_quantity_spec(R1), std::minus<>, Rep1, const Value&>
   [[nodiscard]] friend constexpr Quantity auto operator-(const quantity<R1, Rep1>& lhs, const Value& rhs)
   {
     return lhs - quantity{rhs};
   }
 
   template<auto R1, typename Rep1, RepresentationOf<get_quantity_spec(R1)> Value>
-    requires ImplicitFromNumber<R1> && InvokeResultOf<get_quantity_spec(R1), std::minus<>, Rep1, const Value&>
+    requires ImplicitFromNumberOperand<R1> && InvokeResultOf<get_quantity_spec(R1), std::minus<>, Rep1, const Value&>
   [[nodiscard]] friend constexpr Quantity auto operator-(const Value& lhs, const quantity<R1, Rep1>& rhs)
   {
     return quantity{lhs} - rhs;
@@ -419,14 +447,14 @@ struct quantity_iface {
   }
 
   template<auto R1, typename Rep1, RepresentationOf<get_quantity_spec(R1)> Value>
-    requires ImplicitFromNumber<R1> && InvokeResultOf<get_quantity_spec(R1), std::modulus<>, Rep1, const Value&>
+    requires ImplicitFromNumberOperand<R1> && InvokeResultOf<get_quantity_spec(R1), std::modulus<>, Rep1, const Value&>
   [[nodiscard]] friend constexpr Quantity auto operator%(const quantity<R1, Rep1>& lhs, const Value& rhs)
   {
     return lhs % quantity{rhs};
   }
 
   template<auto R1, typename Rep1, RepresentationOf<get_quantity_spec(R1)> Value>
-    requires ImplicitFromNumber<R1> && InvokeResultOf<get_quantity_spec(R1), std::modulus<>, Rep1, const Value&>
+    requires ImplicitFromNumberOperand<R1> && InvokeResultOf<get_quantity_spec(R1), std::modulus<>, Rep1, const Value&>
   [[nodiscard]] friend constexpr Quantity auto operator%(const Value& lhs, const quantity<R1, Rep1>& rhs)
   {
     return quantity{lhs} % rhs;
@@ -554,7 +582,7 @@ struct quantity_iface {
     requires DecomposableAxis<get_quantity_spec(R1), Rep1, QS>
   [[nodiscard]] friend constexpr Quantity auto get(const quantity<R1, Rep1>& q)
   {
-    return get<axis_index_of<QS>(vector_components<get_quantity_spec(R1)>{})>(q);
+    return get<axis_index_of<QS>(declared_axes<get_quantity_spec(R1)>{})>(q);
   }
 
 #if MP_UNITS_HOSTED
@@ -632,7 +660,9 @@ template<auto R, typename Rep, typename... Qs>
 concept ComposableFrom =
   (sizeof...(Qs) >= 2) && rep_constructible_from_elements<Rep>(std::index_sequence_for<Qs...>{}) &&
   Decomposable<get_quantity_spec(R), Rep> && (sizeof...(Qs) == decomposition_size<get_quantity_spec(R), Rep>()) &&
-  axis_quantities_convertible<R, Rep, Qs...>(std::index_sequence_for<Qs...>{});
+  (axis_quantities_convertible<R, Rep, Qs...>(std::index_sequence_for<Qs...>{}) ||
+   unsatisfied<"Not every argument converts to the component quantity of its position in '{}'">(
+     type_name<quantity<R, Rep>>()));
 
 // Materializes the representation from the component quantities. Each argument is converted to its
 // position's component quantity type first, which is where the unit conversion and the axis check
@@ -641,6 +671,55 @@ template<auto R, typename Rep, std::size_t... Idxs, typename... Qs>
 [[nodiscard]] constexpr Rep compose_representation(std::index_sequence<Idxs...>, const Qs&... qs)
 {
   return Rep{component_quantity<R, Rep, Idxs>{qs}.numerical_value_in(get_unit(R))...};
+}
+
+// Component-wise construction from a single value holding the components, such as a heterogeneous
+// vector, so that the tuple protocol closes on itself too: what decomposes into such a value
+// composes back from one. The values accepted are those a structured binding decomposes through
+// `std::tuple_size`, and each element is read the way such a binding reads it.
+// `std::make_from_tuple` cannot serve, because it accepts only the standard library's own
+// *tuple-like* types and calls `std::get`.
+
+// The `Idx`-th element converts implicitly to the component quantity of that position, which is the
+// check `axis_quantities_convertible` makes for the separate arguments.
+template<auto R, typename Rep, typename T, std::size_t Idx>
+concept TupleLikeElementConvertible = requires(const T& components) {
+  { detail::tuple_like_get<Idx>(components) } -> std::convertible_to<component_quantity<R, Rep, Idx>>;
+};
+
+template<auto R, typename Rep, typename T, std::size_t... Idxs>
+[[nodiscard]] consteval bool tuple_like_elements_convertible(std::index_sequence<Idxs...>)
+{
+  return (... && TupleLikeElementConvertible<R, Rep, T, Idxs>);
+}
+
+// The rules of `ComposableFrom`, with the count read from `std::tuple_size`. This constructor is a
+// candidate for every one-argument construction of a quantity, so the cheap checks come first, and
+// the exclusions keep it away from the constructors that already own such an argument:
+// - a quantity or a point, because a decomposable quantity is itself tuple-like, and converting it
+//   component by component would bypass the quantity-spec conversion rules it is subject to as a whole;
+// - a value convertible to the representation, because a vector representation is tuple-like too, and
+//   it belongs to the value constructors;
+// - a `QuantityLike` type, which converts as a whole through its `quantity_like_traits`. It is asked
+//   only once `std::tuple_size` holds, so other arguments never instantiate those traits.
+// The deleted catch-all that rejects a truncating number for a quantity of unit `one` would otherwise
+// accept a tuple-like value too, so it is constrained on the negation of this concept. It is
+// message-free: the only valid one-argument construction it does not exclude up front is a
+// representation reached explicitly, and a throwing diagnostic here would turn a tuple-like one into
+// a hard error, as it would for that negated use.
+template<auto R, typename Rep, typename T>
+concept ComposableFromTupleLike =
+  (!Quantity<T>) && (!QuantityPoint<T>) && (!std::convertible_to<T, Rep>) && (extent<T>() != dynamic_extent) &&
+  (extent<T>() >= 2) && (!QuantityLike<T>) &&
+  rep_constructible_from_elements<Rep>(std::make_index_sequence<extent<T>()>{}) &&
+  Decomposable<get_quantity_spec(R), Rep> && (extent<T>() == decomposition_size<get_quantity_spec(R), Rep>()) &&
+  tuple_like_elements_convertible<R, Rep, T>(std::make_index_sequence<extent<T>()>{});
+
+template<auto R, typename Rep, typename T, std::size_t... Idxs>
+[[nodiscard]] constexpr Rep compose_representation_from_tuple_like(std::index_sequence<Idxs...>, const T& components)
+{
+  return detail::compose_representation<R, Rep>(std::index_sequence<Idxs...>{},
+                                                detail::tuple_like_get<Idxs>(components)...);
 }
 
 }  // namespace detail
@@ -664,7 +743,9 @@ public:
   // member types and values
   static constexpr Reference auto reference = R;
   static constexpr QuantitySpec auto quantity_spec = get_quantity_spec(reference);
-  static constexpr Dimension auto dimension = get_dimension(quantity_spec);
+  // The member is read directly rather than through `get_dimension(quantity_spec)`: the same value, without one
+  // accessor instantiation per quantity type.
+  static constexpr Dimension auto dimension = quantity_spec._dimension_;
 #if !MP_UNITS_EAGER_STATIC_MEMBER_INIT_HACK
   // Deprecated in 2.6.0. Ill-formed for a quantity kind, which admits every character. Omitted on MSVC up to
   // 19.51 (see `MP_UNITS_EAGER_STATIC_MEMBER_INIT_HACK`).
@@ -672,7 +753,7 @@ public:
     "2.6.0: a quantity's character is no longer a value to inspect; ask "
     "`QuantityOf<Q, quantity_tensor_order::vector>`, `QuantityOf<Q, quantity_field::complex>`, or "
     "another character instead")]] static constexpr quantity_character character =
-    detail::definite_character<detail::admitted_character(quantity_spec)>();
+    detail::definite_character<quantity_spec._character_>();
 #endif
   static constexpr Unit auto unit = get_unit(reference);
   using rep = Rep;
@@ -736,8 +817,10 @@ public:
   {
   }
 
+  // a tuple-like value of the components is not a truncated number: it composes the whole (below)
   template<typename Value>
-    requires detail::ExplicitFromNumber<reference> && (!detail::RepConstructibleFrom<rep, Value>)
+    requires detail::ExplicitFromNumber<reference> && (!detail::RepConstructibleFrom<rep, Value>) &&
+               (!detail::ComposableFromTupleLike<reference, rep, Value>)
   constexpr explicit(!std::convertible_to<Value, rep> ||
                      !mp_units::utility::implicitly_convertible(quantity_spec, dimensionless)) quantity(Value val)
 #if MP_UNITS_HAS_DELETED_FUNCTION_MESSAGE
@@ -757,6 +840,21 @@ public:
   [[nodiscard]] constexpr quantity(const Qs&... qs) :
       numerical_value_is_an_implementation_detail_(
         detail::compose_representation<reference, rep>(std::index_sequence_for<Qs...>{}, qs...))
+  {
+  }
+
+  // The same construction from a single value of the components that a structured binding decomposes
+  // through `std::tuple_size` (a `std::tuple`, a `std::array`, or a third-party type with a member or
+  // an argument-dependent `get`), under the same rules. Implicit, as the separate arguments are. A
+  // quantity, a point, a `QuantityLike` type, and a value convertible to the representation are
+  // excluded, and the deleted truncating constructor above steps aside, so this never competes with
+  // the other one-argument constructors.
+  template<typename T>
+    requires detail::ComposableFromTupleLike<reference, rep, T>
+  // NOLINTNEXTLINE(google-explicit-constructor, hicpp-explicit-conversions)
+  [[nodiscard]] constexpr quantity(const T& components) :
+      numerical_value_is_an_implementation_detail_(detail::compose_representation_from_tuple_like<reference, rep>(
+        std::make_index_sequence<std::tuple_size_v<T>>{}, components))
   {
   }
 
@@ -893,21 +991,21 @@ public:
   }
 
   // data access
-  template<Unit U>
+  template<UnitOf<quantity_spec> U>
     requires(equivalent(U{}, unit))
   [[nodiscard]] constexpr rep& numerical_value_ref_in(U) & noexcept
   {
     return numerical_value_is_an_implementation_detail_;
   }
 
-  template<Unit U>
+  template<UnitOf<quantity_spec> U>
     requires(equivalent(U{}, unit))
   [[nodiscard]] constexpr const rep& numerical_value_ref_in(U) const& noexcept
   {
     return numerical_value_is_an_implementation_detail_;
   }
 
-  template<Unit U>
+  template<UnitOf<quantity_spec> U>
     requires(equivalent(U{}, unit))
   constexpr const rep&& numerical_value_ref_in(U) const&& noexcept
 #if MP_UNITS_HAS_DELETED_FUNCTION_MESSAGE
@@ -1100,16 +1198,21 @@ public:
 // The stored representation is canonicalized (see `representation_canonical_type`) so that an
 // expression-template value (e.g. the result of `Eigen::Vector3d * double`) is materialized to
 // its evaluated concrete type instead of being stored as a proxy holding dangling references.
-template<Reference R, typename Value>
-  requires RepresentationOf<representation_canonical_type_t<Value>, get_quantity_spec(R{})>
-quantity(Value v, R) -> quantity<R{}, representation_canonical_type_t<Value>>;
+// The deduced representation type is a defaulted template parameter instead of being spelled in
+// the guide's result. Clang prints a result type as it is spelled, so users would otherwise see
+// `quantity<R, representation_canonical_type_t<Value>>` in diagnostics. The defaulted parameter
+// reaches them as the plain type, e.g. `quantity<R, double>`. A deduction guide can't be given
+// explicit template arguments, so the extra parameter isn't observable.
+template<Reference R, typename Value, typename Rep = representation_canonical_type_t<Value>>
+  requires RepresentationOf<Rep, get_quantity_spec(R{})>
+quantity(Value v, R) -> quantity<R{}, Rep>;
 
-template<Reference auto R = one, typename Value>
-  requires RepresentationOf<representation_canonical_type_t<Value>, get_quantity_spec(R)>
-quantity(Value) -> quantity<R, representation_canonical_type_t<Value>>;
+template<Reference auto R = one, typename Value, typename Rep = representation_canonical_type_t<Value>>
+  requires RepresentationOf<Rep, get_quantity_spec(R)>
+quantity(Value) -> quantity<R, Rep>;
 
-template<QuantityLike Q>
-quantity(Q) -> quantity<quantity_like_traits<Q>::reference, typename quantity_like_traits<Q>::rep>;
+template<QuantityLike Q, typename Rep = quantity_like_traits<Q>::rep>
+quantity(Q) -> quantity<quantity_like_traits<Q>::reference, Rep>;
 
 MP_UNITS_EXPORT_END
 
@@ -1120,6 +1223,14 @@ template<QuantitySpec auto QS, typename FwdValue>
 {
   return quantity{std::forward<FwdValue>(val), QS[one]};
 }
+
+// Defines the result of the `std::common_type` specializations below. The common representation is a
+// defaulted template parameter so that Clang diagnostics show the plain type (e.g. `int`) rather
+// than `std::common_type_t<short, unsigned char>`.
+template<auto R, typename Rep1, typename Rep2, typename Rep = std::common_type_t<Rep1, Rep2>>
+struct common_quantity_type {
+  using type = quantity<R, Rep>;
+};
 
 }  // namespace detail
 
@@ -1146,15 +1257,12 @@ template<auto R1, typename Rep1, auto R2, typename Rep2>
     requires mp_units::RepresentationOf<
       std::common_type_t<Rep1, Rep2>, mp_units::get_common_quantity_spec(get_quantity_spec(R1), get_quantity_spec(R2))>;
   }
-struct std::common_type<mp_units::quantity<R1, Rep1>, mp_units::quantity<R2, Rep2>> {
-  using type = mp_units::quantity<mp_units::get_common_reference(R1, R2), std::common_type_t<Rep1, Rep2>>;
-};
+struct std::common_type<mp_units::quantity<R1, Rep1>, mp_units::quantity<R2, Rep2>> :
+    mp_units::detail::common_quantity_type<mp_units::get_common_reference(R1, R2), Rep1, Rep2> {};
 
 template<auto R, typename Rep, mp_units::RepresentationOf<get_quantity_spec(R)> Value>
   requires(get_unit(R) == mp_units::one) && requires { typename mp_units::quantity<R, std::common_type_t<Rep, Value>>; }
-struct std::common_type<mp_units::quantity<R, Rep>, Value> {
-  using type = mp_units::quantity<R, std::common_type_t<Rep, Value>>;
-};
+struct std::common_type<mp_units::quantity<R, Rep>, Value> : mp_units::detail::common_quantity_type<R, Rep, Value> {};
 
 template<auto R, typename Rep, mp_units::RepresentationOf<get_quantity_spec(R)> Value>
   requires requires { typename std::common_type<mp_units::quantity<R, Rep>, Value>; }

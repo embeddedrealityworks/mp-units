@@ -81,7 +81,7 @@ inline constexpr struct lateral_velocity : quantity_spec<isq::velocity, is_kind>
 inline constexpr struct vertical_velocity : quantity_spec<isq::velocity, is_kind> {} vertical_velocity;
 
 template<>
-struct mp_units::vector_components<flight_velocity> :
+struct mp_units::component_vectors<flight_velocity> :
     mp_units::vector_axes<forward_velocity, lateral_velocity, vertical_velocity> {};
 ```
 
@@ -118,7 +118,7 @@ The type V2 *should* produce (a dedicated scalar-magnitude _quantity spec_, for 
 `vec_mag<isq::force>` with scalar character) cannot be expressed yet. The consequence is
 subtle. When the unit derives purely from scalar base units (`km/h` → _length/time_) the
 result collapses to a clean scalar character. But for a unit tied to a vector _quantity
-spec_ (`N` is `kind_of<isq::force>`) the result **keeps vector character**, so technically
+spec_ (the kind of `N` admits a vector) the result **keeps vector character**, so technically
 you could take the magnitude of a magnitude. That is a known limitation.
 
 !!! info "Why no quantity-level `scalar_product()` / `vector_product()` in V2?"

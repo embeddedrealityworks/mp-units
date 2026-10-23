@@ -29,6 +29,7 @@
 #include <mp-units/bits/hacks.h>
 #include <mp-units/bits/module_macros.h>
 #include <mp-units/bits/quantity_spec_hierarchy.h>
+#include <mp-units/bits/unsatisfied.h>
 #include <mp-units/compat_macros.h>
 #include <mp-units/ext/algorithm.h>
 #include <mp-units/ext/type_name.h>
@@ -151,10 +152,8 @@ template<std::same_as<character_mask>... Ts>
 template<typename... Qs1, typename... Qs2>
 [[nodiscard]] consteval character_mask derived_quantity_character(const type_list<Qs1...>&, const type_list<Qs2...>&)
 {
-  constexpr character_mask num =
-    detail::common_quantity_character(character_mask{}, detail::admitted_character(expr_type<Qs1>{})...);
-  constexpr character_mask den =
-    detail::common_quantity_character(character_mask{}, detail::admitted_character(expr_type<Qs2>{})...);
+  constexpr character_mask num = detail::common_quantity_character(character_mask{}, expr_type<Qs1>::_character_...);
+  constexpr character_mask den = detail::common_quantity_character(character_mask{}, expr_type<Qs2>::_character_...);
   return detail::common_quantity_character(num, den);
 }
 
@@ -249,23 +248,17 @@ struct quantity_spec_sort_key<open_factor<N>> : quantity_spec_sort_key<N> {
   static constexpr bool open = true;
 };
 
-template<typename Lhs, typename Rhs>
-consteval bool quantity_spec_less_value()
-{
-  using lhs = quantity_spec_sort_key<Lhs>;
-  using rhs = quantity_spec_sort_key<Rhs>;
-  // `compare` rather than the comparison operators: an operator on `std::string_view` is resolved
-  // against every operator of namespace `std`, and each candidate taking a `std::error_code` or a
-  // `std::error_condition` is probed for a conversion from `std::string_view` first, which costs
-  // several constant evaluations per comparison. A member call resolves within the class.
-  if (const int order = lhs::root.compare(rhs::root); order != 0) return order < 0;
-  if (const int order = lhs::kind_root.compare(rhs::kind_root); order != 0) return order < 0;
-  if (const int order = lhs::name.compare(rhs::name); order != 0) return order < 0;
-  return !lhs::open && rhs::open;
-}
+// A variable template rather than a function: a function would be instantiated once per pair of
+// factors compared, and the sort runs on every quantity-spec product.
+template<typename Lhs, typename Rhs, typename L = quantity_spec_sort_key<Lhs>, typename R = quantity_spec_sort_key<Rhs>>
+constexpr bool quantity_spec_less_value =
+  L::root.compare(R::root) != 0             ? L::root.compare(R::root) < 0
+  : L::kind_root.compare(R::kind_root) != 0 ? L::kind_root.compare(R::kind_root) < 0
+  : L::name.compare(R::name) != 0           ? L::name.compare(R::name) < 0
+                                            : (!L::open && R::open);
 
 template<typename Lhs, typename Rhs>
-struct quantity_spec_less : std::bool_constant<quantity_spec_less_value<Lhs, Rhs>()> {};
+struct quantity_spec_less : std::bool_constant<quantity_spec_less_value<Lhs, Rhs>> {};
 
 template<typename T1, typename T2>
 using type_list_of_quantity_spec_less = expr_less<T1, T2, quantity_spec_less>;
@@ -378,7 +371,9 @@ struct quantity_spec_interface : quantity_spec_interface_base {
   }
 
   template<typename Self, typename FwdQ, Quantity Q = std::remove_cvref_t<FwdQ>>
-    requires(mp_units::utility::explicitly_convertible(Q::quantity_spec, Self{})) &&
+    requires(mp_units::utility::explicitly_convertible(Q::quantity_spec, Self{}) ||
+             detail::unsatisfied<"A quantity of '{}' is not convertible to '{}'">(detail::type_name(Q::quantity_spec),
+                                                                                  detail::type_name(Self{}))) &&
             requires { typename quantity<make_reference(Self{}, Q::unit), typename Q::rep>; }
   [[nodiscard]] constexpr Quantity auto operator()(this Self, FwdQ && q)
   {
@@ -387,7 +382,9 @@ struct quantity_spec_interface : quantity_spec_interface_base {
   }
 
   template<typename Self, typename FwdQP, QuantityPoint QP = std::remove_cvref_t<FwdQP>>
-    requires(mp_units::utility::explicitly_convertible(QP::quantity_spec, Self{})) &&
+    requires(mp_units::utility::explicitly_convertible(QP::quantity_spec, Self{}) ||
+             detail::unsatisfied<"A quantity of '{}' is not convertible to '{}'">(detail::type_name(QP::quantity_spec),
+                                                                                  detail::type_name(Self{}))) &&
             requires { typename quantity_point<make_reference(Self{}, QP::unit), QP::point_origin, typename QP::rep>; }
   [[nodiscard]] constexpr QuantityPoint auto operator()(this Self self, FwdQP && qp)
   {
@@ -396,7 +393,9 @@ struct quantity_spec_interface : quantity_spec_interface_base {
   }
 
   template<typename Self, typename FwdValue, RepresentationOf<Self{}> Value = std::remove_cvref_t<FwdValue>>
-    requires(detail::explicitly_convertible_to_dimensionless(Self{}))
+    requires(detail::explicitly_convertible_to_dimensionless(Self{}) ||
+             detail::unsatisfied<"'{}' is not dimensionless, so it cannot be made from a raw number">(
+               detail::type_name(Self{})))
   [[nodiscard]] constexpr Quantity auto operator()(this Self, FwdValue && val)
   {
     return make_quantity_of_one<Self{}>(std::forward<FwdValue>(val));
@@ -409,7 +408,9 @@ struct quantity_spec_interface : quantity_spec_interface_base {
   }
 
   template<typename FwdQ, Quantity Q = std::remove_cvref_t<FwdQ>, typename Self_ = Self>
-    requires(mp_units::utility::explicitly_convertible(Q::quantity_spec, Self_{})) &&
+    requires(mp_units::utility::explicitly_convertible(Q::quantity_spec, Self_{}) ||
+             detail::unsatisfied<"A quantity of '{}' is not convertible to '{}'">(detail::type_name(Q::quantity_spec),
+                                                                                  detail::type_name(Self_{}))) &&
             requires { typename quantity<make_reference(Self{}, Q::unit), typename Q::rep>; }
   [[nodiscard]] constexpr Quantity auto operator()(FwdQ && q) const
   {
@@ -418,7 +419,9 @@ struct quantity_spec_interface : quantity_spec_interface_base {
   }
 
   template<typename FwdQP, QuantityPoint QP = std::remove_cvref_t<FwdQP>, typename Self_ = Self>
-    requires(mp_units::utility::explicitly_convertible(QP::quantity_spec, Self_{})) &&
+    requires(mp_units::utility::explicitly_convertible(QP::quantity_spec, Self_{}) ||
+             detail::unsatisfied<"A quantity of '{}' is not convertible to '{}'">(detail::type_name(QP::quantity_spec),
+                                                                                  detail::type_name(Self_{}))) &&
             requires { typename quantity_point<make_reference(Self{}, QP::unit), QP::point_origin, typename QP::rep>; }
   [[nodiscard]] constexpr QuantityPoint auto operator()(FwdQP && qp) const
   {
@@ -427,7 +430,9 @@ struct quantity_spec_interface : quantity_spec_interface_base {
   }
 
   template<typename FwdValue, typename Self_ = Self, RepresentationOf<Self_{}> Value = std::remove_cvref_t<FwdValue>>
-    requires(detail::explicitly_convertible_to_dimensionless(Self_{}))
+    requires(detail::explicitly_convertible_to_dimensionless(Self_{}) ||
+             detail::unsatisfied<"'{}' is not dimensionless, so it cannot be made from a raw number">(
+               detail::type_name(Self_{})))
   [[nodiscard]] constexpr Quantity auto operator()(FwdValue && val) const
   {
     return make_quantity_of_one<Self{}>(std::forward<FwdValue>(val));
@@ -579,10 +584,9 @@ struct quantity_spec<Self, Eq, Args...> : detail::quantity_spec_interface<Self> 
 #endif
   using _base_type_ = quantity_spec;
   static constexpr auto _equation_ = Eq;
-  static constexpr Dimension auto _dimension_ = get_dimension(Eq);
+  static constexpr Dimension auto _dimension_ = Eq._dimension_;
 
-  static constexpr detail::character_mask _character_ =
-    detail::quantity_character_init<Args...>(detail::admitted_character(Eq));
+  static constexpr detail::character_mask _character_ = detail::quantity_character_init<Args...>(Eq._character_);
   static_assert(!mp_units::contains<struct non_negative, Args...>() || detail::is_real_scalar(_character_),
                 "non_negative can only be applied to real scalar quantities");
   static_assert(!(mp_units::contains<struct non_negative, Args...>() &&
@@ -648,9 +652,8 @@ struct quantity_spec<Self, QS, Args...> : detail::propagate_equation<QS>, detail
 #endif
   using _base_type_ = quantity_spec;
   static constexpr auto _parent_ = QS;
-  static constexpr Dimension auto _dimension_ = get_dimension(_parent_);
-  static constexpr detail::character_mask _character_ =
-    detail::quantity_character_init<Args...>(detail::admitted_character(QS));
+  static constexpr Dimension auto _dimension_ = _parent_._dimension_;
+  static constexpr detail::character_mask _character_ = detail::quantity_character_init<Args...>(QS._character_);
   static_assert(!mp_units::contains<struct non_negative, Args...>() || detail::is_real_scalar(_character_),
                 "non_negative can only be applied to real scalar quantities");
   static_assert(!(mp_units::contains<struct non_negative, Args...>() &&
@@ -711,10 +714,9 @@ struct quantity_spec<Self, QS, Eq, Args...> : detail::quantity_spec_interface<Se
   using _base_type_ = quantity_spec;
   static constexpr auto _parent_ = QS;
   static constexpr auto _equation_ = Eq;
-  static constexpr Dimension auto _dimension_ = get_dimension(_parent_);
+  static constexpr Dimension auto _dimension_ = _parent_._dimension_;
 
-  static constexpr detail::character_mask _character_ =
-    detail::quantity_character_init<Args...>(detail::admitted_character(Eq));
+  static constexpr detail::character_mask _character_ = detail::quantity_character_init<Args...>(Eq._character_);
   static_assert(!mp_units::contains<struct non_negative, Args...>() || detail::is_real_scalar(_character_),
                 "non_negative can only be applied to real scalar quantities");
   static_assert(!(mp_units::contains<struct non_negative, Args...>() &&
@@ -735,8 +737,8 @@ struct quantity_spec<Self, QS, Eq, Args...> : detail::quantity_spec_interface<Se
 namespace detail {
 
 template<QuantitySpec Q>
-  requires requires { get_dimension(Q{}); }
-using to_dimension = MP_UNITS_NONCONST_TYPE(get_dimension(Q{}));
+  requires requires { Q::_dimension_; }
+using to_dimension = MP_UNITS_NONCONST_TYPE(Q::_dimension_);
 
 template<typename... Expr>
 struct derived_quantity_spec_impl :

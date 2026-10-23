@@ -114,34 +114,24 @@ in order to form a quantity.
 
 ## Why can I add newton metres to joules?
 
-Because `40 * N * m` never claimed to be a _moment of force_. It provides a unit, and with
-it a dimension, but it does not name a quantity:
+Because `40 * N * m` and `40 * J` never claimed to be a _moment of force_ or an _energy_.
+Each provides a unit, and with it a dimension, but neither names a quantity:
 
 ```cpp
 quantity sum = 40 * N * m + 40 * J;   // OK
 ```
 
 A quantity created from units alone converts down to the quantity it is combined with, so
-the same operand is accepted on either side of the collision:
+the same operand is accepted on either side of the addition:
 
 ```cpp
-quantity T = isq::torque(40 * N * m);
-quantity W = isq::mechanical_work(40 * J);
+quantity torque = isq::torque(40 * N * m);
+quantity work = isq::mechanical_work(40 * J);
 
-quantity a = T + 40 * N * m;   // OK, converts down to isq::torque
-quantity b = W + 40 * N * m;   // OK, converts down to isq::mechanical_work
+quantity a = torque + 40 * N * m;   // OK, converts down to isq::torque
+quantity b = work + 40 * N * m;     // OK, converts down to isq::mechanical_work
+quantity c = torque + 40 * J;       // OK as well, the joule is a plain `N * m`
 ```
-
-The joule does not behave that way, because it is a named unit constrained to _energy_:
-
-```cpp
-// auto T2 = isq::torque(40 * J);   // Compile-time error: J is constrained to energy
-```
-
-So the asymmetry is not an oversight. A kind rides on a unit's *name*, not on what the unit
-expands to: `Gy` and `Sv` are both `joule / kilogram` and still refuse each other.
-`N * m` has no name of its own, it is the product of two units, so a quantity spelled
-that way names no quantity and has to remain usable for every quantity of that dimension.
 
 This is also what makes a strict interface free for the caller. A function template may
 constrain its parameter as tightly as `QuantityOf<isq::torque>` while the call site still
@@ -150,20 +140,20 @@ passes a plain `40 * N * m`.
 The kind check fires as soon as both operands name their quantity:
 
 ```cpp
-// auto sum = T + W;   // Compile-time error: quantities of different kinds
+// auto sum = torque + work;   // Compile-time error: quantities of different kinds
 ```
 
-_Work_ and _moment of force_ have different defining equations and sit in different quantity
-trees, so they are quantities of different kinds, and no conversion between them exists.
+_Work_ and _moment of force_ have different defining equations and sit in different
+quantity trees, so they are quantities of different kinds, and no conversion between them
+exists. The units carry no such distinction.
 
 !!! note
 
-    Some units do restrict the kind on their own, and for those the units alone are enough to
-    reject the operation. `Gy` is `kind_of<isq::absorbed_dose>` while `Sv` is
-    `kind_of<isq::dose_equivalent>`, so `1.5 * Gy + 2.0 * Sv` is ill-formed even though both
-    are defined as `J / kg`. The same holds for `Hz` and `Bq`. `J` is restricted this way too,
-    to _energy_, which is why `40 * J` above is an _energy_ rather than an unnamed quantity of
-    that dimension. `N * m` is not a named unit at all, so nothing restricts it.
+    Some units do restrict the kind on their own, and for those the units alone are enough
+    to reject the operation. `Gy` is `kind_of<isq::absorbed_dose>` while `Sv` is
+    `kind_of<isq::dose_equivalent>`, so `1.5 * Gy + 2.0 * Sv` is ill-formed even though
+    both are defined as `J / kg`. The same holds for `Hz` and `Bq`. The next question says
+    which units those are and why not more.
 
 !!! note
 
@@ -172,6 +162,63 @@ trees, so they are quantities of different kinds, and no conversion between them
     and in
     [the Systems of Quantities chapter](../users_guide/framework_basics/systems_of_quantities.md).
 
+## Why do only some named units carry a quantity kind?
+
+A named unit carries a kind, `named_unit<"Hz", one / second, kind_of<isq::frequency>>`,
+where the SI brochure keeps its name for one quantity. The brochure says the hertz shall
+only be used for periodic phenomena and the becquerel only for the _activity_ of a
+radionuclide, keeps the gray and the sievert for _absorbed dose_ and _dose equivalent_
+rather than the joule per kilogram, so that the two are not confused, and adopted the
+katal for _catalytic activity_. The radian and the steradian carry the angle kinds, `bit`
+and the other IEC units with a quantity of their own, `var`, `baud` and `erlang`, carry
+theirs, the photometric units carry one for their spectral weighting, and the base units
+define the base kinds. Every other named unit, `N`, `Pa`, `J`, `V`, `F`, `Ω`, `S` and `T`
+among them, has the kind of its definition, so `J` has the kind of `kg * m² / s²`.
+
+ISO 80000-1:2009 goes further and notes, in clause 3.9, that the joule is used for
+_energy_ and never for a _moment of force_. The library doesn't follow that one. A
+_torque_ in joules and a _torque_ in newton metres hold the same number, so nothing is at
+risk, and the choice is the author's. A kind on a unit refuses that unit for every other
+quantity of the same dimension, which is worth having where the brochure keeps a name for
+one quantity, and it would refuse the next quantity someone defines on that dimension as
+well. In a product it costs more. With a kind on the joule, `N * m * W` would have the
+kind `energy * force * length / time`, an _energy_ next to a _force_ times a _length_, and
+`isq::torque(2 * N * m) * isq::power(3 * W)` could not be converted to its own unit,
+because the engine would keep the _energy_ and the _torque_ apart. So the rule is the
+brochure's, and the typed quantities keep the distinctions the units don't:
+
+```cpp
+quantity<isq::torque[J]> torque = isq::torque(40 * N * m);   // OK
+// auto f = isq::frequency(1 * Bq);                           // Compile-time error: Bq is reserved for activity
+// auto s = isq::torque(40 * N * m) + isq::energy(40 * J);    // Compile-time error: quantities of different kinds
+```
+
+
+## Why can't I wrap `omega * inertia` in `isq::angular_momentum(...)`?
+
+We want to read the product of an _angular velocity_ in `rad / s` and a _moment of
+inertia_ in `kg * m2` as an _angular momentum_. The problem is the unit. The call
+`isq::angular_momentum(q)` keeps the unit of `q`, here `kg * m² * rad / s`, and that is
+no unit of _angular momentum_: ISQ defines it as a _position vector_ times a _momentum_,
+which holds no angle, while the unit carries a radian. The solution is to name a unit
+without the angle, which says the radian goes:
+
+```cpp
+quantity omega = isq::angular_velocity(2.0 * rad / s);
+quantity inertia = isq::moment_of_inertia(3.0 * kg * m2);
+
+quantity<isq::angular_momentum[kg * m2 / s]> l1 = omega * inertia;                    // OK
+quantity l2 = quantity<isq::angular_momentum[kg * m2 / s]>(omega * inertia);          // OK
+// Compile-time error: kg * m² * rad / s is no unit of angular momentum
+// quantity l3 = isq::angular_momentum(omega * inertia);
+```
+
+The library doesn't drop the radian on its own, because whether it is an angle or just
+a number is the author's decision, and the unit is where it is written. The same holds
+for every ISQ quantity whose definition has no angle while a factor's unit has one, such
+as _power_ from a _torque_ and an _angular velocity_. The `isq_angle` system defines
+_torque_ with the angle, so that case stays implicit there, see
+[Strong Angular System](../users_guide/systems/strong_angular_system.md).
 
 ## Why a Dimensionless Quantity Is Not Just a Fundamental Arithmetic Type
 

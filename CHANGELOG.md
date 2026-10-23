@@ -8,6 +8,33 @@ This page documents the version history and changes for the **mp-units** library
 
 ### 2.6.0 <small>TBD</small> { id="2.6.0" }
 
+- fix: the displacement between two point origins keeps a named unit that already is the
+      coarsest exact one, so a `-27 cm` origin offset and the point differences across it
+      print in `cm` rather than in `(1/100 m)`
+- refactor: `quantity_from()` and `quantity_from_zero()` of a quantity point are renamed to
+      `delta_from()` and `delta_from_zero()`. They return a delta, and once a point is a
+      `quantity` too, "quantity from" no longer says which one. The former names are
+      deprecated
+- fix: `magnitude` of an unsigned value returns the value, where it called `std::abs`,
+      which has no unsigned overload
+- (!) refactor: `char`, `wchar_t`, `char8_t`, `char16_t`, and `char32_t` are not
+      representation types, as `bool` isn't. A character type holds a character, not a
+      number, so `quantity<si::metre, char>` is ill-formed. `signed char` and `unsigned char`,
+      the types of `std::int8_t` and `std::uint8_t`, stay representation types
+- feat: a vector quantity composes from a single value holding its components, the
+      inverse of its tuple protocol: `quantity<flight_velocity[km / h], vec3> v =
+      std::tuple{fwd, lat, vert};`. Any type a structured binding decomposes through
+      `std::tuple_size` is accepted, its elements read as such a binding reads them,
+      through a member `get` or one found by argument-dependent lookup, so a third-party
+      vector works, which `std::make_from_tuple` cannot do. The rules are those of the
+      component-wise constructor, element by element, and the conversion is implicit like
+      it. A quantity, a point, a `QuantityLike` type, and a value convertible to the
+      representation are not composed this way, and the deleted truncating constructor of
+      a quantity of unit `one` no longer takes such a value for a number
+- refactor: the customization point that declares the axes of a vector quantity is
+      `component_vectors`, after the term ISO 80000-2 uses for the vectors a₁e₁, a₂e₂, and
+      a₃e₃ of a vector. The former name `vector_components` is deprecated. A specialization
+      of it still declares the axes
 - (!) refactor: the quantity specification conversion engine is reimplemented from a
       written specification, the new chapter
       [Quantity Specification Conversions](https://mpusz.github.io/mp-units/latest/users_guide/advanced_topics/quantity_spec_conversions/).
@@ -43,6 +70,29 @@ This page documents the version history and changes for the **mp-units** library
 - fix: the inverse of an angle no longer converts implicitly to a plain number.
       `1 / isq::angular_measure` to `dimensionless` drops the angle, so it is explicit, and
       an angle doesn't convert to its own inverse, even with `quantity_cast`
+- (!) refactor: `si::newton`, `si::pascal`, `si::joule`, `si::volt`, `si::farad`,
+      `si::ohm`, `si::siemens`, and `si::tesla` no longer carry a quantity kind. A named
+      unit carries one where the SI brochure keeps the name for one quantity, `Hz`, `Bq`,
+      `Gy`, `Sv` and `kat`, where the library needs it for its own distinctions, `rad`,
+      `sr`, the base units, the photometric units, and IEC's `var`, `bit`, `baud` and
+      `erlang`. So `quantity<isq::torque[J]>` is well-formed and `1 * J` converts to a
+      torque, as `1 * N * m` always converted to an energy, while `1 * Hz` still doesn't
+      convert to an activity, nor `Bq / m` to a frequency per length. ISO 80000-1:2009
+      notes that the joule is not written for a moment of force, and that convention is
+      left to the author
+- fix: a product of typed quantities converts to its own unit again. `omega * inertia`
+      with `omega` in `rad / s` has the unit `kg m² rad/s`, and a moment of inertia is
+      defined over an angular velocity, so its specification takes the angle away that the
+      velocity brings and the angle looked lost. For a kind source, what a factor's
+      definition takes away now stays apart from what the other factors carry. The angle
+      of `rad / s` also died against the `rotation` in `rotation * angular_velocity`
+      before the velocity was expanded. From a kind source, a pairing that would refuse
+      now waits for a factor that mentions the tree, however deep
+- fix: a product of three typed quantities converts to its own unit when one of them is a
+      dimensionless count. `omega * inertia * turns`, with `turns` an `isq::rotation`, can
+      be read in `kg m² rad/s` again. After a sibling pairing from a kind source is
+      deferred, the shallowest factor that has an equation is expanded first, so the angle
+      of the unit meets the `angular_velocity` and not the `rotation` beside it
 - fix: the kind boundary lowers every verdict between two named quantities, and between a
       named quantity and a kind, where it used to lower only an `implicit` verdict, and
       from a kind none at all. A `kind_of<isq::angular_velocity>` converts to a child
@@ -87,6 +137,43 @@ This page documents the version history and changes for the **mp-units** library
       defining `__cpp_lib_format`. It now skips only that library
 - fix: the deprecated `mp_units::cartesian_vector` and random-distribution aliases warn on
       GCC 12 as well. They were plain using-declarations there
+- fix: Clang diagnostics print the representation type of a deduced `quantity` or
+      `quantity_point`, and of the `std::common_type` of two quantities, as the plain type
+      (`int`) instead of the library's internal spelling
+      (`representation_canonical_type_t<int>`, `typename Q::rep`, or
+      `std::common_type_t<short, unsigned char>`). Multiplying or dividing a unit by a
+      `quantity` now states why it is ill-formed, as multiplying a unit by a number already
+      did.
+- fix: a rejected `+`, `-`, `%`, `==` or `<=>` on two quantities of different kinds, and a
+      rejected `hypot`, report that the quantities have no common quantity instead of an
+      invalid call to `get_common_reference`. Three more mistakes get a sentence: a raw
+      number in `+`, `-` or `%` with a dimensioned quantity, `quantity_from()` with an
+      unrelated origin, and `quantity_from_zero()` on a point whose origin is not the
+      natural one. A `QuantityOf`, `QuantitySpecOf` or `QuantityPointOf` asked with a quantity
+      specification no longer explains the rejected character branch through every
+      `std::is_same_v` under it, which cut Clang's notes for a mismatched `QuantityOf`
+      parameter from 149 lines to 31
+- fix: a quantity or a point that meets a representation constraint is rejected in one
+      note (`!disable_representation<…>`) instead of three layers of representation
+      concepts, a vector added to a scalar quantity of the same kind reports the
+      representations that have no sum instead of an ill-formed `std::invoke_result`, and
+      a representation whose character the quantity does not admit fails a named
+      `CharacterAdmitted` concept. Sentences now also name a quantity of another kind
+      added to or subtracted from a point, a difference or comparison of points with
+      unrelated origins, component-wise construction whose arguments do not fit the axes,
+      `fma`, `fmod` and `remainder` on quantities of different kinds, `floor`, `ceil`,
+      `round` and `inverse` to a unit of another kind, `quantity_cast` to a specification
+      it cannot reach, `value_cast` to a quantity type of another specification, and a
+      quantity specification called with a quantity it cannot convert or with a raw number
+      when it is not dimensionless
+- fix: a conversion whose scaling factor overflows the representation type, such as `1
+      * Zm + 1 * am` with `int`, is an unsatisfied constraint on Clang as it is on GCC. It
+      was a hard error there, since `try_get_value` returned its disengaged
+      `std::optional` by copy, which Clang rejects in constant evaluation with libstdc++
+- fix: a `named_unit` given a quantity specification where a quantity kind is
+      required, `named_unit<"x", isq::length>` instead of `named_unit<"x",
+      kind_of<isq::length>>`, fails the `NamedUnitArguments` constraint with a sentence
+      naming `kind_of` instead of as an incomplete type
 - feat: the concepts for symbolic types accept a const-qualified type, the way the
       standard's type categories do. `Unit<decltype(si::metre)>` and
       `QuantitySpec<decltype(isq::length)>` now hold, just as `Quantity<const Q>` always
@@ -147,11 +234,34 @@ This page documents the version history and changes for the **mp-units** library
 - fix: the GLM integration header no longer breaks an `import std;` build. Its own GLM
       includes now precede the standard-library import, since GLM pulls in `<cmath>`
       textually and libstdc++ requires every such include to come first
+- (!) fix: `numerical_value_ref_in` now constrains its unit the way `in()` and
+      `numerical_value_in()` already did. It used to check only that the unit is
+      equivalent, so for `quantity f = 50. * Hz;` the call `f.numerical_value_ref_in(Bq)`
+      compiled and handed out the number of a frequency "in becquerel"
+- (!) refactor: throwing constraints are off unless `MP_UNITS_API_THROWING_CONSTRAINTS`
+      is enabled. The headers used to turn them on whenever `__cpp_constexpr_exceptions`
+      was at least `202411L`. Their message is formatted at compile time, which the
+      library does only through {fmt}, so enabling them together with `std::format` now
+      stops the CMake configure step, and an `#error` does the same for header-only use
+- fix: the library compiles in a hosted build with exceptions disabled
+      (`-fno-exceptions`). Text-formatting errors, `basic_fixed_string::at` and
+      `inplace_vector` go through `MP_UNITS_THROW`, which aborts without exceptions.
+      `throw_policy` and `safe_int_throw_policy` are provided only when exceptions are
+      enabled, so `constrained` and `safe_int` default to the terminating policies
+      otherwise. Throwing constraints fall back to plain constraint failures, without the
+      formatted message. A new `unit_tests_no_exceptions` target builds every public
+      header with `-fno-exceptions`
+- fix: on GCC, type names in constraint diagnostics no longer end in
+      `; std::string_view = std::basic_string_view<char>`. The same suffix could make GCC
+      order a type whose name is a prefix of another's differently from Clang when sorting
+      the terms of a symbolic expression
 - feat: vector quantity decomposition added. A vector quantity splits into 1D-vector
       component quantities through `get<Idx>`, `std::tuple_size` / `std::tuple_element`, and
-      structured bindings, provided its representation offers element access (`get<I>` or
-      `operator[]`) and states its length through `std::tuple_size`. Declaring the component
-      axes with the `vector_components` customization point and `vector_axes` makes every
+      structured bindings, provided its representation offers element access (a member
+      `get<I>()`, a `get<I>` found by argument-dependent lookup, or `operator[]`, tried in
+      that order) and states its length through `std::tuple_size`. Declaring the component
+      axes, one per element of the representation, with the `component_vectors`
+      customization point and `vector_axes` makes every
       component a distinct kind, reachable as `get<Axis>` and rejected in cross-axis
       arithmetic. The inverse is a component-wise constructor
       (`quantity<flight_velocity[km / h], vec3> v = {fwd, lat, vert}`), which checks each
@@ -291,6 +401,37 @@ This page documents the version history and changes for the **mp-units** library
       operand on every product. The component-wise `quantity` constructor orders its
       constraint cheapest-first, so the `{value, reference}` construction behind
       `42 * m` no longer runs the decomposition checks of every new quantity type
+- perf: four more cuts found by the same attribution. `Unit`, `QuantitySpec`, `Dimension`
+      and `PointOrigin` check their base with `is_base_of_v` (one atom instead of
+      `derived_from`'s two) and fold the `SymbolicConstant` traits into one atom: the
+      `isq.h` umbrella evaluates 12 % fewer constant expressions. `type_list_size` is a
+      variable template specialization, so no class is instantiated per list (698
+      fewer instantiations in that umbrella). The framework reads `_character_` and
+      `_dimension_` directly where it already holds the type instead of instantiating an
+      accessor per type (651 fewer). `prefixed_unit` carries the two members of
+      `scaled_unit_impl` itself instead of deriving from it, one class instantiation
+      fewer for each of the ~670 prefixed symbols of `si/unit_symbols.h`
+- perf: `type_list_element`, `type_list_split` and `type_list_extract` use the
+      `__type_pack_element` builtin where the compiler provides it (Clang, GCC 14 and
+      later), the C++20/23 counterpart of the C++26 pack-indexing path. The indexed
+      multiple-inheritance trick they used costs three class instantiations per list on
+      every spec or unit product; the `isq.h` umbrella drops 6.7 % of its instantiations and
+      14 % of its constant evaluations at C++23. GCC 12, GCC 13 and MSVC keep the trick. The
+      factor ordering predicate of quantity specs is an expression rather than a function,
+      one instantiation fewer per pair of factors compared
+- perf: the first 100 primes that magnitude factorization starts from are a literal table.
+      Computing them with a probable-prime test per candidate cost about 30 ms of constant
+      evaluation in every translation unit that includes a system header, which charged
+      even a TU that includes only the core and defines nothing
+- perf: `RepresentationOf` matches the character inside a requires-expression behind its two
+      guards, and `disable_representation` rejects a `quantity` or a `quantity_point` by a
+      pattern-matched specialization. Clang substitutes the template arguments of every atom
+      of a constraint whether it evaluates the atom or not, so a rejected type still had
+      `representable_character<T>` instantiated for it, which evaluates `Scalar`, `Vector`
+      and `Tensor` on the type: `RepresentationOf` on a point went from 2,707 constraint
+      checks to 262. Measured on the benchmark corpus with no loss on any workflow; a wider
+      rewrite of the operators' `Value` overloads around the same finding was measured as
+      mixed on the gate and not kept
 - fix: `basic_fixed_string::swap` never compiled — it called an undeclared `swap_ranges`
       through `begin()`/`end()`, which yield `const_iterator` and cannot be written through.
       Nothing called it, so it was never instantiated. It now exchanges the contents
@@ -437,9 +578,21 @@ This page documents the version history and changes for the **mp-units** library
         violates the precondition of the operation storing it)
 - feat: `exclusive_bound{q}` added to exclude an end from the range of a bounds policy
         (accepted by `check_in_range` at either end and by `wrap_to_range` at its max)
-- feat: `is_within_bounds<QP>(q, origin)` and `try_make<QP>(q, origin)` added for points
-        with a checking policy or without bounds (`try_make` returns
-        `std::expected<QP, bounds_violation>`)
+- feat: each bound of a bounds policy must be exactly representable in the quantity type
+        of a point checked against it, and so must the offset to a bounded ancestor for a
+        point with a representation that is not floating-point
+- feat: a point that breaks that rule is not constructible from a quantity and offers no
+        `is_within_bounds` or `try_make` (a `float` point needs `float` bounds: the
+        `double` value of `0.1` isn't a `float` value)
+- feat: `min()` and `max()` of a point whose origin has no bounds of its own report the
+        bounds of its nearest bounded ancestor in the point's frame (with a floating-point
+        representation, the extreme values those bounds accept after rounding)
+- fix: `==` and `<=>` between points of different origins are offered only when the
+        translation their bodies perform compiles (a `constrained` representation has no
+        arithmetic with a plain origin offset)
+- feat: the static member functions `QP::is_within_bounds(q, origin)` and
+        `QP::try_make(q, origin)` added for points with a checking policy or without bounds
+        (`try_make` returns `std::expected<QP, bounds_violation>`)
 - feat: `quantity_from_unit_zero()` member function added (replaces `quantity_from_zero()`)
 - feat: `numerical_value_in(Unit)` and `force_numerical_value_in(Unit)` member functions
         added to `quantity_point` (extract the raw value of a default-origin point; the

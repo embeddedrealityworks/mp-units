@@ -26,6 +26,7 @@
 #include <mp-units/ext/fixed_string.h>
 #include <mp-units/ext/type_traits.h>
 #include <mp-units/systems/isq/electromagnetism.h>
+#include <mp-units/systems/isq/light_and_radiation.h>
 #include <mp-units/systems/isq/mechanics.h>
 #include <mp-units/systems/isq/space_and_time.h>
 #include <mp-units/systems/si.h>
@@ -66,12 +67,20 @@ static_assert(sizeof(quantity<si::metre>) == sizeof(double));
 static_assert(sizeof(quantity<isq::length[m]>) == sizeof(double));
 static_assert(sizeof(quantity<si::metre, short>) == sizeof(short));
 static_assert(sizeof(quantity<isq::length[m], short>) == sizeof(short));
+static_assert(sizeof(quantity<si::metre, std::int8_t>) == sizeof(std::int8_t));
+static_assert(sizeof(quantity<si::metre, std::uint8_t>) == sizeof(std::uint8_t));
 
 template<template<auto, typename> typename Q>
 concept invalid_types = requires {
   requires !requires { typename Q<isq::dim_length, double>; };  // dimension instead of reference
   requires !requires { typename Q<isq::length, double>; };      // quantity_spec instead of reference
   requires !requires { typename Q<isq::length[m], bool>; };     // bool is not a valid representation type
+  requires !requires { typename Q<isq::length[m], char>; };     // nor is a character type
+  requires !requires { typename Q<isq::length[m], wchar_t>; };
+  requires !requires { typename Q<isq::length[m], char8_t>; };
+  requires !requires { typename Q<isq::length[m], char16_t>; };
+  requires !requires { typename Q<isq::length[m], char32_t>; };
+  requires !requires { typename Q<si::metre, char>; };
   requires !requires { typename Q<isq::length[m], quantity<isq::length[m]>>; };  // quantity used as Rep
 #if MP_UNITS_HOSTED
   requires !requires {
@@ -102,6 +111,11 @@ static_assert(!has_magnitude<quantity<isq::length[m]>>);
 static_assert(has_magnitude<quantity<isq::velocity[m / s], double>>);
 static_assert(QuantityOf<decltype(std::declval<quantity<isq::velocity[m / s], double>>().magnitude()),
                          quantity_tensor_order::scalar>);
+
+// the magnitude of an unsigned value is the value itself
+static_assert(magnitude(4u) == 4u);
+static_assert(magnitude(std::uint8_t{200}) == std::uint8_t{200});
+static_assert((4u * isq::velocity[m / s]).magnitude().numerical_value_in(m / s) == 4u);
 
 #if MP_UNITS_HOSTED
 QUANTITY_SPEC(complex_velocity, isq::velocity, quantity_field::complex);
@@ -338,6 +352,14 @@ static_assert(!std::constructible_from<quantity<isq::length[m]>, quantity<isq::d
 static_assert(!std::convertible_to<quantity<isq::duration[s]>, quantity<isq::length[m]>>);
 static_assert(!std::constructible_from<quantity<isq::length[m]>, quantity<isq::speed[m / s]>>);
 static_assert(!std::convertible_to<quantity<isq::speed[m / s]>, quantity<isq::length[m]>>);
+static_assert(!std::constructible_from<quantity<isq::frequency[Hz]>, quantity<isq::activity[Bq]>>);  // other kind
+static_assert(!std::convertible_to<quantity<isq::activity[Bq]>, quantity<isq::frequency[Hz]>>);
+static_assert(!std::constructible_from<quantity<isq::height[m]>, quantity<isq::width[m]>>);  // other branch
+static_assert(!std::convertible_to<quantity<isq::width[m]>, quantity<isq::height[m]>>);
+static_assert(!std::convertible_to<quantity<isq::length[m]>, quantity<isq::height[m]>>);  // downcast is explicit
+static_assert(!std::constructible_from<quantity<m>, quantity<one>>);
+static_assert(!std::constructible_from<quantity<one>, quantity<m / s>>);
+static_assert(!std::constructible_from<quantity<m>, double, decltype(s)>);  // value with a unit of another quantity
 
 // implicit conversion from another quantity only if non-truncating
 static_assert(std::constructible_from<quantity<isq::length[m]>, quantity<isq::length[m], int>>);  // int -> double OK
@@ -659,10 +681,27 @@ static_assert(quantity<isq::length[km], int>(2 * km).numerical_value_in(m) == 20
 
 template<template<auto, typename> typename Q>
 concept invalid_getter_with_unit_conversion = requires {
-  requires !requires { Q<isq::length[m], int>(2000 * m).numerical_value_in(km); };  // truncating conversion
-  requires !requires { Q<isq::length[m], int>(2 * m).numerical_value_in(s); };      // invalid unit
+  requires !requires { Q<isq::length[m], int>(2000 * m).numerical_value_in(km); };     // truncating conversion
+  requires !requires { Q<isq::length[m], int>(2 * m).numerical_value_in(s); };         // invalid unit
+  requires !requires { Q<isq::frequency[Hz], int>(60 * Hz).numerical_value_in(Bq); };  // unit of a different kind
 };
 static_assert(invalid_getter_with_unit_conversion<quantity>);
+
+// a reference to the stored number is handed out in an equivalent unit of the same kind
+static_assert(requires(quantity<isq::frequency[Hz], int> freq) {
+  { freq.numerical_value_ref_in(one / s) } -> std::same_as<int&>;
+});
+
+template<template<auto, typename> typename Q>
+concept invalid_reference_getter =
+  requires(Q<isq::length[m], int> q, Q<isq::frequency[Hz], int> freq, const Q<isq::frequency[Hz], int> const_freq) {
+    requires !requires { q.numerical_value_ref_in(km); };                             // non-equivalent unit
+    requires !requires { q.numerical_value_ref_in(s); };                              // unit of a different quantity
+    requires !requires { Q<isq::length[m], int>(2 * m).numerical_value_ref_in(m); };  // temporary
+    requires !requires { freq.numerical_value_ref_in(Bq); };        // unit of a different kind (same magnitude)
+    requires !requires { const_freq.numerical_value_ref_in(Bq); };  // unit of a different kind (same magnitude)
+  };
+static_assert(invalid_reference_getter<quantity>);
 
 
 ///////////////////////////////////////
@@ -715,6 +754,82 @@ constexpr QuantityOf<isq::length> auto get_length_child_quantity() noexcept
 }
 static_assert(get_length_child_quantity() == 1 * m);
 
+
+//////////////////////////////////////
+// a product converts to its own unit
+//////////////////////////////////////
+
+// `q1 * q2` has the unit `U1 * U2` and the quantity specification `Q1 * Q2`, and the kind of
+// `U1 * U2` is the kinds of `U1` and `U2` multiplied into one product, so the product converts to
+// its own unit only if that one kind reaches `Q1 * Q2`. Angles, solid angles, and plain numbers are
+// where that used to fail: `kg m² rad/s` carries one angle, and `angular_velocity *
+// moment_of_inertia` carries one and takes one away again (a moment of inertia is defined over an
+// angular velocity), so read as one product the angle looked lost, and the angle of `rad/s` died
+// against the `rotation` in `rotation * angular_velocity` before `angular_velocity` was expanded.
+template<auto R>
+concept has_own_unit =
+  UnitOf<MP_UNITS_NONCONST_TYPE(get_unit(R)), get_quantity_spec(R)> && requires(quantity<R> q) { q.in(get_unit(R)); };
+
+template<auto R1, auto R2>
+consteval bool products_have_own_units()
+{
+  bool result = true;
+  if constexpr (requires { R1 * R2; }) result = result && has_own_unit<R1 * R2>;
+  if constexpr (requires { R1 / R2; }) result = result && has_own_unit<R1 / R2>;
+  return result;
+}
+
+template<auto R, auto... Rs>
+consteval bool products_with_each_have_own_units()
+{
+  return (... && products_have_own_units<R, Rs>());
+}
+
+// every ordered pair of the references, products and quotients
+template<auto... Rs>
+consteval bool all_products_have_own_units()
+{
+  return (... && products_with_each_have_own_units<Rs, Rs...>());
+}
+
+static_assert(all_products_have_own_units<isq::angular_velocity[rad / s], isq::angular_measure[rad],
+                                          isq::solid_angular_measure[sr], isq::radiant_intensity[W / sr],
+                                          isq::radiance[W / (sr * m2)], isq::rotation[one], dimensionless[percent],
+                                          isq::moment_of_inertia[kg * m2], isq::power[W], isq::action[J * s]>());
+
+// the pairs that regressed when the conversion engine was rewritten
+static_assert(has_own_unit<isq::angular_velocity[rad / s] * isq::moment_of_inertia[kg * m2]>);  // L = I ω
+static_assert(has_own_unit<isq::moment_of_inertia[kg * m2] * isq::angular_velocity[rad / s]>);
+static_assert(has_own_unit<isq::angular_acceleration[rad / s2] * isq::moment_of_inertia[kg * m2]>);  // M = I α
+static_assert(has_own_unit<isq::torque[N * m] * isq::power[W]>);
+static_assert(has_own_unit<isq::torque[N * m] * isq::radiant_intensity[W / sr]>);
+static_assert(has_own_unit<isq::action[J * s] * isq::torque[N * m]>);
+static_assert(has_own_unit<isq::rotation[one] * isq::angular_velocity[rad / s]>);  // the angle hides in the velocity
+static_assert(has_own_unit<isq::rotation[one] / isq::radiance[W / (sr * m2)]>);
+static_assert(has_own_unit<isq::radiant_intensity[W / sr] / isq::rotation[one]>);
+
+// units that cancel between the operands
+static_assert(has_own_unit<isq::angular_impulse[N * m * s] * isq::power[W]>);  // `s` against the `1/s` in `W`
+static_assert(has_own_unit<isq::power[W] * isq::angular_impulse[N * m * s]>);
+static_assert(has_own_unit<isq::angular_impulse[N * m * s] * isq::radiant_intensity[W / sr]>);
+static_assert(has_own_unit<isq::torque[N * m] * isq::radiance[W / (sr * m2)]>);                  // `m` against `m⁻²`
+static_assert(has_own_unit<isq::phase_coefficient[rad / m] * isq::moment_of_inertia[kg * m2]>);  // `kg m rad`
+static_assert(has_own_unit<isq::angular_repetency[rad / m] * isq::moment_of_inertia[kg * m2]>);
+static_assert(has_own_unit<isq::angular_velocity[rad / s] * isq::moment_of_inertia[kg * m2] * isq::time[s]>);
+static_assert(has_own_unit<isq::angular_velocity[rad / s] * isq::moment_of_inertia[kg * m2] * isq::rotation[one]>);
+static_assert(has_own_unit<isq::rotation[one] * isq::moment_of_inertia[kg * m2] * isq::angular_velocity[rad / s]>);
+static_assert(has_own_unit<isq::angular_velocity[rad / s] * isq::moment_of_inertia[kg * m2] * isq::rotation[one] *
+                           isq::rotation[one]>);
+static_assert(has_own_unit<isq::torque[N * m] * isq::power[W] / isq::area[m2]>);
+static_assert(has_own_unit<isq::torque[N * m] * isq::power[W] / isq::acceleration[m / s2]>);
+static_assert(has_own_unit<isq::torque[N * m] * isq::radiant_intensity[W / sr] / isq::acceleration[m / s2]>);
+
+// a typed quantity times a simple one: the simple one's kinds become kind factors of the product
+static_assert(has_own_unit<isq::angular_velocity[rad / s] * (kg * m2)>);
+static_assert(has_own_unit<(rad / s) * isq::moment_of_inertia[kg * m2]>);
+static_assert(has_own_unit<isq::torque[N * m] * W>);
+static_assert(has_own_unit<isq::angular_impulse[N * m * s] * W>);
+static_assert(has_own_unit<isq::torque[N * m] * isq::power[W] / m2>);
 
 /////////
 // CTAD
@@ -972,7 +1087,7 @@ concept invalid_binary_operations = requires {
   requires !requires { 1 * s - Q<isq::length[m], int>(1 * m); };
 
   // no floating-point modulo
-  requires !requires(Q<isq::length[m], double> a) { a % 2 * m; };
+  requires !requires(Q<isq::length[m], double> a) { a % (2 * m); };
   requires !requires(Q<isq::length[m], double> a) { 2 * m % a; };
   requires !requires(Q<isq::length[m], double> a) { a % 2; };
   requires !requires(Q<isq::length[m], double> a, Q<isq::length[m], double> b) { a % b; };
@@ -985,6 +1100,13 @@ concept invalid_binary_operations = requires {
   // no vector modulo
   requires !requires(Q<si::metre, utility::cartesian_vector<double>> a) { a % (v{2.} * m); };
 #endif
+
+  // raw numbers
+  requires !requires { Q<isq::length[m], int>(1 * m) + 1; };
+  requires !requires { 1 + Q<isq::length[m], int>(1 * m); };
+  requires !requires { Q<isq::length[m], int>(1 * m) - 1; };
+  requires !requires { 1 - Q<isq::length[m], int>(1 * m); };
+  requires !requires { Q<isq::length[m], int>(1 * m) % 1; };
 
   // unit constants
   requires !requires { Q<isq::length[m], int>(1) + m; };
@@ -1342,6 +1464,13 @@ concept invalid_dimensionless_conversion = requires { requires !requires { QS(42
 
 static_assert(invalid_dimensionless_conversion<isq::length>);
 
+template<auto QS, auto Q>
+concept invalid_quantity_spec_conversion = requires { requires !requires { QS(Q); }; };
+
+static_assert(invalid_quantity_spec_conversion<isq::length, 42. * s>);              // different dimension
+static_assert(invalid_quantity_spec_conversion<isq::activity, 42. * Hz>);           // different kind
+static_assert(invalid_quantity_spec_conversion<isq::height, 42. * isq::width[m]>);  // different branch
+
 static_assert(2 * rad * (2 * rad) == 4 * pow<2>(rad));
 
 // modulo arithmetics
@@ -1647,6 +1776,13 @@ static_assert(no_cross_unit_int_comparison<isq::volume[cubic(km)], isq::volume[c
 // Linear length pair: Zm (10^21 m) vs am (10^-18 m): factor = 10^39 > 2^127, so even value=1
 // makes integer comparison ill-formed.
 static_assert(no_cross_unit_int_comparison<isq::length[Zm], isq::length[am]>);
+// The same pair as plain units, in arithmetic and in a forced conversion as well: this spelling
+// reaches `try_get_value` with a disengaged result, which the typed one above does not.
+template<Reference auto R1, Reference auto R2>
+constexpr bool no_cross_unit_int_arithmetic =
+  !requires { 1 * R1 + 1 * R2; } && !requires { 1 * R1 - 1 * R2; } && !requires { (1 * R1).in(R2, truncated); };
+static_assert(no_cross_unit_int_comparison<Zm, am>);
+static_assert(no_cross_unit_int_arithmetic<Zm, am>);
 
 
 //////////////////
@@ -1744,8 +1880,20 @@ template<template<auto, typename> typename Q>
 concept invalid_quantity_cast = requires {
   requires !requires { quantity_cast<dimensionless>(Q<rad, double>(42. * rad)); };
   requires !requires { quantity_cast<dimensionless>(Q<isq::angular_measure[rad], double>(42. * rad)); };
+  requires !requires { quantity_cast<isq::duration>(Q<isq::length[m], double>(42. * m)); };       // different dimension
+  requires !requires { quantity_cast<isq::activity>(Q<isq::frequency[Hz], double>(42. * Hz)); };  // different kind
 };
 static_assert(invalid_quantity_cast<quantity>);
+
+template<template<auto, typename> typename Q>
+concept invalid_value_cast = requires(Q<isq::height[m], double> q) {
+  requires !requires { value_cast<s>(q); };                                         // unit of a different quantity
+  requires !requires { value_cast<Bq>(Q<isq::frequency[Hz], double>(42. * Hz)); };  // unit of a different kind
+  requires !requires { value_cast<Q<isq::width[m], double>>(q); };  // value_cast does not change the spec
+  requires !requires { value_cast<Q<isq::length[m], double>>(q); };
+  requires !requires { value_cast<bool>(q); };  // not a representation type
+};
+static_assert(invalid_value_cast<quantity>);
 
 // QuantityOf
 static_assert(QuantityOf<quantity<isq::length[m]>, isq::length>);
@@ -1773,8 +1921,8 @@ static_assert(QuantityOf<quantity<isq::velocity[m / s], int>, isq::displacement 
 
 static_assert(QuantityOf<decltype(10 * m), isq::height>);                        // kind of
 static_assert(QuantityOf<decltype(10 * kind_of<isq::length>[m]), isq::height>);  // kind of
-static_assert(!QuantityOf<decltype(10 * isq::length[m]), isq::height>);          // different kinds
-static_assert(!QuantityOf<decltype(10 * isq::width[m]), isq::height>);           // different kinds
+static_assert(!QuantityOf<decltype(10 * isq::length[m]), isq::height>);          // more generic
+static_assert(!QuantityOf<decltype(10 * isq::width[m]), isq::height>);           // different branch
 static_assert(QuantityOf<decltype(10 * isq::speed[m / s]), isq::speed>);
 static_assert(
   QuantityOf<decltype(20 * isq::length[m] / (2 * isq::duration[s])), isq::speed>);  // derived unnamed quantity
@@ -1786,9 +1934,9 @@ concept overflowing_unit_conversion = requires {
   requires !requires { quantity<si::milli<si::metre>, std::int16_t>(Q); };
   requires !requires { Q.in(si::metre); };
   requires !requires { Q.in(si::metre, truncated); };
-  requires !requires { Q + std::int8_t(1) * nm; };  // promotion to int
-  requires !requires { Q - std::int8_t(1) * nm; };  // promotion to int
-  requires !requires { Q % std::int8_t(1) * m; };
+  requires !requires { Q + std::int8_t(1) * nm; };    // promotion to int
+  requires !requires { Q - std::int8_t(1) * nm; };    // promotion to int
+  requires !requires { Q % (std::int8_t(1) * nm); };  // promotion to int
   requires !requires { Q == std::int8_t(1) * m; };
   requires !requires { Q < std::int8_t(1) * m; };
   requires !requires { typename std::common_type_t<decltype(Q), quantity<si::metre, std::int8_t>>; };

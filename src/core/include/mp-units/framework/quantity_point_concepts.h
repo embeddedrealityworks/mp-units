@@ -90,6 +90,11 @@ MP_UNITS_EXPORT template<Reference auto R, PointOriginFor<get_quantity_spec(R)> 
                          RepresentationOf<get_quantity_spec(R)> Rep>
 class quantity_point;
 
+// Matched by pattern, as for `quantity`: a point is rejected as a representation before anything is
+// evaluated on it.
+template<auto R, auto PO, typename Rep>
+inline constexpr bool disable_representation<quantity_point<R, PO, Rep>> = true;
+
 namespace detail {
 
 template<auto R, auto PO, typename Rep>

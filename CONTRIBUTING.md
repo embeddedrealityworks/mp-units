@@ -5,9 +5,9 @@ Thank you for your interest in contributing to **mp-units**! 👍🎉
 Before contributing, we strongly recommend familiarizing yourself with the
 [official documentation](https://mpusz.github.io/mp-units).
 
-??? info "This file is a part of MkDocs documentation"
+??? info "This file is a part of ProperDocs documentation"
 
-    This file is part of the documentation and uses some MkDocs‑specific formatting that may
+    This file is part of the documentation and uses some ProperDocs‑specific formatting that may
     look unusual in a plain Markdown renderer. For the fully rendered version, visit the
     [Contributing](https://mpusz.github.io/mp-units/latest/getting_started/contributing)
     chapter.
@@ -70,7 +70,7 @@ conan build . -pr gcc15 -c user.mp-units.build:all=True -b missing
 python scripts/mrdocs/run.py
 
 # Preview documentation locally
-mkdocs serve
+properdocs serve
 
 # Run pre-commit checks
 pre-commit run --all-files
@@ -173,13 +173,13 @@ For more, see the [official documentation](https://mpusz.github.io/mp-units) and
     - easily [start a live server to preview the documentation as you write](https://squidfunk.github.io/mkdocs-material/creating-your-site/#previewing-as-you-write)
 
         ```shell
-        mkdocs serve
+        properdocs serve
         ```
 
     - [build the documentation](https://squidfunk.github.io/mkdocs-material/creating-your-site/#building-your-site)
 
         ```shell
-        mkdocs build
+        properdocs build
         ```
 
     ### Generating the API reference
@@ -197,7 +197,7 @@ For more, see the [official documentation](https://mpusz.github.io/mp-units) and
     generated pages land in _docs/reference/api_reference/mrdocs/_ and are not
     committed.
 
-    Running it by hand is optional: `mkdocs serve` and `mkdocs build` call it
+    Running it by hand is optional: `properdocs serve` and `properdocs build` call it
     themselves. Either way it regenerates only when something it depends on
     changed, which takes about a minute for the whole library, and otherwise
     costs a hash of the inputs. Pass `--force` to regenerate regardless.
@@ -355,6 +355,19 @@ you write **mp-units** code:
   compiler-bug workarounds, standard-mandated subtleties, invariants, and references to a
   specification.
 
+### Documentation structure
+
+The documentation follows [Diátaxis](https://diataxis.fr), and the User's Guide
+(_docs/users_guide/_) is its explanation part. A User's Guide chapter opens with a problem
+the reader has, builds up the concepts that solve it, and says why the library is designed
+that way. It also teaches the domain (ISO 80000, the ISQ, the metrology vocabulary),
+because most C++ developers have never met it. Define each term before its first use.
+
+Rejected design alternatives and "why is X missing?" questions do not belong in the User's
+Guide. They go in the [FAQ](https://mpusz.github.io/mp-units/latest/getting_started/faq),
+and the chapter links to the FAQ entry where the question arises, as _the_affine_space.md_
+does for the quantity point constructor.
+
 ### Unified code formatting
 
 A formatting standard is enforced with the `pre-commit` script. Before committing your changes,
@@ -405,13 +418,42 @@ The official list of supported compilers can always be found in the
 [C++ compiler support (API/ABI)](https://mpusz.github.io/mp-units/latest/getting_started/cpp_compiler_support)
 chapter of our documentation.
 
+### Commit messages
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org). The
+subject line has the form `type(scope): summary`, and the Conventional Commits extension in
+the dev container helps to compose it.
+
+The `type` says what kind of change it is:
+
+- `feat` adds a feature,
+- `fix` fixes a bug,
+- `perf` makes the library faster, or cheaper to compile,
+- `refactor` restructures code without changing its behavior,
+- `docs` changes only the documentation,
+- `test` changes only the tests,
+- `build` changes the build, the packaging, or the development environment,
+- `ci` changes the CI workflows,
+- `style` reformats, or changes the formatting tools,
+- `chore` is any other maintenance.
+
+The `scope` is optional and names the part of the repository that changed, for example
+`core`, `systems`, `utility`, `example`, `docs`, or `devcontainer`. The summary starts
+with a lowercase letter, unless its first word is a name such as `MSVC`, and has no
+trailing period.
+
+A `!` after the scope, as in `feat(core)!: ...`, marks a breaking change, and the body then
+explains what breaks and how to migrate. The body also says why the change was needed. If
+the commit resolves an issue, put `Resolves #123` in the body, and GitHub closes the issue
+when the commit reaches `master`.
+
 
 ## CI/CD Integration
 
 Each pull request triggers a comprehensive CI pipeline:
 
 <!-- markdownlint-disable-next-line MD013 -->
-- **Multi-compiler builds**: GCC 12-16, [Clang 16-21 except Clang-19](https://mpusz.github.io/mp-units/latest/getting_started/cpp_compiler_support),
+- **Multi-compiler builds**: GCC 12-16, [Clang 16-18, 20, 21, and 23](https://mpusz.github.io/mp-units/latest/getting_started/cpp_compiler_support),
   Apple Clang, and MSVC, across C++20/23/26 and the library's configuration options
 - **Code formatting**: clang-format and pre-commit checks
 - **Static analysis**: clang-tidy analysis for code quality

@@ -200,6 +200,9 @@ struct magnitude_t {
       return vec.norm();
     else if constexpr (!Scalar<T> && requires { norm(vec); })
       return norm(vec);
+    // the magnitude of an unsigned value is the value itself, and `std::abs` has no unsigned overload
+    else if constexpr (std::unsigned_integral<T>)
+      return vec;
     // allow real types to represent one dimensional vector quantities
     else if constexpr (std::is_arithmetic_v<T>)
 #if MP_UNITS_HOSTED || __cpp_lib_freestanding_cstdlib >= 202306L
@@ -411,24 +414,33 @@ template<auto V>
 [[nodiscard]] consteval character_mask character_constraint()
 {
   if constexpr (QuantitySpec<MP_UNITS_NTTP_HACK(decltype(V))>)
-    return admitted_character(V);
+    return V._character_;
   else
     return axis_mask<V>();
 }
+// The character of the representation is admitted by the constraint when the slots the representation
+// can fill meet the orders the constraint admits, and likewise for the field. Named so that a vector
+// representation given to a scalar quantity is reported in these terms.
+template<typename T, auto V>
+concept CharacterAdmitted =
+  detail::overlaps(detail::representable_character<T>.order, detail::character_constraint<V>().order) &&
+  detail::overlaps(detail::representable_character<T>.field, detail::character_constraint<V>().field);
 MP_UNITS_DIAGNOSTIC_POP
 
 }  // namespace detail
 
-// Matching is one intersection per axis: the slots the representation can fill have to meet the
-// orders the constraint admits, and likewise for the field.
-//
-// `SomeRepresentation<T>` leads the conjunction so that a non-representation (in particular a
-// `quantity`, which `disable_representation` rejects) never reaches the character machinery. The
-// `CharacterConstraint<V>` guard follows, so a non-character fails early on the guard.
+// `!disable_representation<T>` leads the conjunction on its own, although `SomeRepresentation` asks it
+// again. A quantity or a point meets every `Value` parameter of an operator, and the one atom is what a
+// diagnostic then shows for it, instead of the three layers of representation concepts under
+// `SomeRepresentation`. `SomeRepresentation<T>` follows, so that a non-representation never reaches
+// the character machinery, and the `CharacterConstraint<V>` guard, so a non-character fails early.
+// The character match sits inside a requires-expression so that it is one atom whose operands are
+// substituted only when the guards hold. Written as plain atoms, their mapping would be substituted
+// whenever the concept is checked, and that instantiates `representable_character<T>` for every `T`
+// that reaches a `RepresentationOf` constraint. Computing it means evaluating `Scalar`, `Vector` and
+// `Tensor` on `T`.
 MP_UNITS_EXPORT template<typename T, auto V>
-concept RepresentationOf =
-  detail::SomeRepresentation<T> && detail::CharacterConstraint<V> &&
-  detail::overlaps(detail::representable_character<T>.order, detail::character_constraint<V>().order) &&
-  detail::overlaps(detail::representable_character<T>.field, detail::character_constraint<V>().field);
+concept RepresentationOf = (!disable_representation<T>) && detail::SomeRepresentation<T> &&
+                           detail::CharacterConstraint<V> && requires { requires detail::CharacterAdmitted<T, V>; };
 
 }  // namespace mp_units

@@ -44,6 +44,16 @@ base-url: https://github.com/mpusz/mp-units/blob/master/src/
 implementation-defined:
   - "mp_units::detail"
   - "mp_units::**::detail"
+  ## Names ending in `_` are implementation details. The types (`kind_of_`, `point_`, `delta_`,
+  ## the prefix templates such as `kilo_`) are what users get from a variable template, never
+  ## what they spell, and P3045 makes them exposition-only. The members (`_symbol_`,
+  ## `_quantity_spec_`, `value_`) exist only to make a type structural. They render as
+  ## `/* implementation-defined */` where they appear and get no page of their own. The `<*>`
+  ## patterns catch the partial specializations, which the plain ones miss (`kind_of_<Q>`).
+  - "mp_units::*_"
+  - "mp_units::**::*_"
+  - "mp_units::*_<*>"
+  - "mp_units::**::*_<*>"
 
 ## The `unit_symbols` namespaces are the short identifiers you write in code
 ## (`si::unit_symbols::km`). Every one of them is a one-line alias, and there
@@ -76,7 +86,7 @@ addons-supplemental:
 
 ## `generator: [md, mkdocs-nav]` with per-generator `output` works and keeps both
 ## outputs flat in one directory, but the `mkdocs-nav` script generator never
-## completes on this corpus (~7500 symbols) - see addons/extensions/. The MkDocs
+## completes on this corpus (~7500 symbols) - see addons/extensions/. The ProperDocs
 ## hook derives the nav itself for now.
 ## `copy-dependencies` (the default) copies members of an undocumented base into
 ## the derived class, which drags libstdc++ internals into the reference: the
@@ -115,4 +125,4 @@ warn-if-undoc-enum-val: false
 ## <table> in libstdc++'s <bits/random.h>, which the `random.h` wrappers
 ## derive from. There is no way to limit warnings to the configured `input`,
 ## so that one is noise we carry.
-report: 2
+log-level: info

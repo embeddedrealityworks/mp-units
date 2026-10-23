@@ -155,10 +155,10 @@ would predefine such a type for this domain.
 quantity_point<isq::distance[si::metre]> qp1(100 * m);
 quantity_point<isq::distance[si::metre]> qp2 = point<m>(120);
 
-assert(qp1.quantity_from_zero() == 100 * m);
-assert(qp2.quantity_from_zero() == 120 * m);
-assert(qp2.quantity_from(qp1) == 20 * m);
-assert(qp1.quantity_from(qp2) == -20 * m);
+assert(qp1.delta_from_zero() == 100 * m);
+assert(qp2.delta_from_zero() == 120 * m);
+assert(qp2.delta_from(qp1) == 20 * m);
+assert(qp1.delta_from(qp2) == -20 * m);
 
 assert(qp2 - qp1 == 20 * m);
 assert(qp1 - qp2 == -20 * m);
@@ -170,7 +170,7 @@ In the above code `100 * m` and `120 * m` still create two quantities that serve
 _displacement vectors_ here. Quantity point objects can be explicitly constructed from
 such quantities only when their origin is an instantiation of the `natural_point_origin<QuantitySpec>`.
 
-It is really important to understand that even though we can use `.quantity_from_zero()`
+It is really important to understand that even though we can use `.delta_from_zero()`
 to obtain the _displacement vector_ of a point from its default origin, the point by itself
 does not represent or have any associated physical value. It is just a point in some space.
 The same point can be expressed with different _displacement vectors_ from different origins.
@@ -184,8 +184,8 @@ are compatible:
 quantity_point<si::metre> qp1{isq::distance(100 * m)};
 quantity_point<si::metre> qp2 = point<isq::height[m]>(120);
 
-assert(qp2.quantity_from(qp1) == 20 * m);
-assert(qp1.quantity_from(qp2) == -20 * m);
+assert(qp2.delta_from(qp1) == 20 * m);
+assert(qp1.delta_from(qp2) == -20 * m);
 assert(qp2 - qp1 == 20 * m);
 assert(qp1 - qp2 == -20 * m);
 ```
@@ -262,12 +262,12 @@ inline constexpr struct origin : absolute_point_origin<isq::distance> {} origin;
 quantity_point<si::metre, origin> qp1 = origin + 100 * m;
 quantity_point<si::metre, origin> qp2 = 120 * m + origin;
 
-// assert(qp1.quantity_from_zero() == 100 * m);   // Compile-time error
-// assert(qp2.quantity_from_zero() == 120 * m);   // Compile-time error
-assert(qp1.quantity_from(origin) == 100 * m);
-assert(qp2.quantity_from(origin) == 120 * m);
-assert(qp2.quantity_from(qp1) == 20 * m);
-assert(qp1.quantity_from(qp2) == -20 * m);
+// assert(qp1.delta_from_zero() == 100 * m);   // Compile-time error
+// assert(qp2.delta_from_zero() == 120 * m);   // Compile-time error
+assert(qp1.delta_from(origin) == 100 * m);
+assert(qp2.delta_from(origin) == 120 * m);
+assert(qp2.delta_from(qp1) == 20 * m);
+assert(qp1.delta_from(qp2) == -20 * m);
 
 assert(qp1 - origin == 100 * m);
 assert(qp2 - origin == 120 * m);
@@ -305,11 +305,11 @@ quantity_point qp1{100 * m, origin};
 Again, CTAD always helps to use precisely the type we need in a current case.
 
 Additionally, if a quantity point is defined in terms of a custom, named origin, then we
-can't use a `quantity_from_zero()` member function anymore. This is to prevent surprises,
+can't use a `delta_from_zero()` member function anymore. This is to prevent surprises,
 as our origin may not necessarily be perceived as an absolute zero in the domain we model.
 Also, as we will learn soon, we can define several related origins in one space, and then
 it gets harder to understand which one is the zero one. This is why, to be specific and
-always correct about the points we use, a `quantity_from(QP)` member function can be used
+always correct about the points we use, a `delta_from(QP)` member function can be used
 (where `QP` can either be an origin or another quantity point).
 
 Finally, please note that it is not allowed to subtract two point origins defined in terms
@@ -330,8 +330,8 @@ inline constexpr struct origin2 : absolute_point_origin<isq::distance> {} origin
 quantity_point qp1 = origin1 + 100 * m;
 quantity_point qp2 = origin2 + 120 * m;
 
-assert(qp1.quantity_from(origin1) == 100 * m);
-assert(qp2.quantity_from(origin2) == 120 * m);
+assert(qp1.delta_from(origin1) == 100 * m);
+assert(qp2.delta_from(origin2) == 120 * m);
 
 assert(qp1 - origin1 == 100 * m);
 assert(qp2 - origin2 == 120 * m);
@@ -341,9 +341,9 @@ assert(origin2 - qp2 == -120 * m);
 // assert(qp2 - qp1 == 20 * m);                    // Compile-time error
 // assert(qp1 - origin2 == 100 * m);               // Compile-time error
 // assert(qp2 - origin1 == 120 * m);               // Compile-time error
-// assert(qp2.quantity_from(qp1) == 20 * m);       // Compile-time error
-// assert(qp1.quantity_from(origin2) == 100 * m);  // Compile-time error
-// assert(qp2.quantity_from(origin1) == 120 * m);  // Compile-time error
+// assert(qp2.delta_from(qp1) == 20 * m);       // Compile-time error
+// assert(qp1.delta_from(origin2) == 100 * m);  // Compile-time error
+// assert(qp2.delta_from(origin1) == 120 * m);  // Compile-time error
 ```
 
 
@@ -370,24 +370,24 @@ quantity_point qp2 = D + 120 * m;
 assert(qp1.quantity_ref_from(qp1.point_origin) == 100 * m);
 assert(qp2.quantity_ref_from(qp2.point_origin) == 120 * m);
 
-assert(qp2.quantity_from(qp1) == 30 * m);
-assert(qp1.quantity_from(qp2) == -30 * m);
+assert(qp2.delta_from(qp1) == 30 * m);
+assert(qp1.delta_from(qp2) == -30 * m);
 assert(qp2 - qp1 == 30 * m);
 assert(qp1 - qp2 == -30 * m);
 
-assert(qp1.quantity_from(A) == 120 * m);
-assert(qp1.quantity_from(B) == 110 * m);
-assert(qp1.quantity_from(C) == 100 * m);
-assert(qp1.quantity_from(D) == 90 * m);
+assert(qp1.delta_from(A) == 120 * m);
+assert(qp1.delta_from(B) == 110 * m);
+assert(qp1.delta_from(C) == 100 * m);
+assert(qp1.delta_from(D) == 90 * m);
 assert(qp1 - A == 120 * m);
 assert(qp1 - B == 110 * m);
 assert(qp1 - C == 100 * m);
 assert(qp1 - D == 90 * m);
 
-assert(qp2.quantity_from(A) == 150 * m);
-assert(qp2.quantity_from(B) == 140 * m);
-assert(qp2.quantity_from(C) == 130 * m);
-assert(qp2.quantity_from(D) == 120 * m);
+assert(qp2.delta_from(A) == 150 * m);
+assert(qp2.delta_from(B) == 140 * m);
+assert(qp2.delta_from(C) == 130 * m);
+assert(qp2.delta_from(D) == 120 * m);
 assert(qp2 - A == 150 * m);
 assert(qp2 - B == 140 * m);
 assert(qp2 - C == 130 * m);
@@ -499,14 +499,14 @@ inline constexpr struct ocean_surface : absolute_point_origin<isq::altitude> {} 
 template<>
 inline constexpr auto mp_units::frame_projection<sea_level, ocean_surface> =
     [](QuantityPointOf<isq::altitude> auto qp) {
-        return ocean_surface - qp.quantity_from(sea_level);
+        return ocean_surface - qp.delta_from(sea_level);
     };
 
 // The inverse must be provided explicitly — the library never derives it automatically:
 template<>
 inline constexpr auto mp_units::frame_projection<ocean_surface, sea_level> =
     [](QuantityPointOf<isq::altitude> auto qp) {
-        return sea_level - qp.quantity_from(ocean_surface);
+        return sea_level - qp.delta_from(ocean_surface);
     };
 ```
 
@@ -560,7 +560,7 @@ struct CameraCalibration { double R[3][3]; double t[3]; };
 template<>
 inline constexpr auto mp_units::frame_projection<world_frame, camera_frame> =
     [](QuantityPointOf<isq::length> auto qp, const CameraCalibration& cal) {
-        return camera_frame + forward_transform(cal, qp.quantity_from(world_frame));
+        return camera_frame + forward_transform(cal, qp.delta_from(world_frame));
     };
 
 // Different call sites supply different calibrations — no global state required:
@@ -630,7 +630,7 @@ arithmetic operations.
 
     ```cpp
     // Convert to plain angular_measure for trig functions
-    const quantity<angular_measure> lat_angle = isq::angular_measure(lat.quantity_from(geographic::equator));
+    const quantity<angular_measure> lat_angle = isq::angular_measure(lat.delta_from(geographic::equator));
     const quantity result = sin(lat_angle);  // Works with angular_measure
     ```
 
@@ -765,6 +765,33 @@ Bounds are enforced at these points:
 
 After each mutation the library transparently applies the bounds policy specified on the origin.
 
+### Bounds the Point Can Hold
+
+A policy compares a value with its bounds in the value's own type. Each bound therefore has
+to be exactly representable in the point's quantity type (for a floating-point
+representation, in the bound's own unit). Otherwise the policy would compare against a
+rounded bound. A point whose quantity type can't hold a bound offers no constructor from a
+quantity, no `is_within_bounds`, and no `try_make`:
+
+```cpp
+inline constexpr struct tape_start :
+    absolute_point_origin<isq::length, check_in_range{0.1 * m, 10. * m}> {} tape_start;
+inline constexpr struct tape_start_f :
+    absolute_point_origin<isq::length, check_in_range{0.1f * m, 10.f * m}> {} tape_start_f;
+
+quantity_point<isq::length[m], tape_start> p1{0.5 * m, tape_start};             // OK
+quantity_point<isq::length[m], tape_start_f, float> p2{0.5f * m, tape_start_f};  // OK
+// quantity_point<isq::length[m], tape_start, float> p3{0.5f * m, tape_start};   // ❌
+```
+
+`p3` doesn't compile because the `double` value of `0.1` isn't a `float` value. A `float`
+point needs an origin with `float` bounds, such as `tape_start_f`. A bound with a small
+integral value, such as `-90. * deg`, is exact in `float`, which holds every integer up to
+16'777'216.
+
+With a floating-point representation, scaling a bound to the point's unit is accepted,
+because it can't be exact in general (0.3048 m per foot has no exact binary form).
+
 ### Origin Inheritance
 
 A `relative_point_origin` that defines **no own bounds** automatically inherits the
@@ -804,6 +831,13 @@ quantity_point low = average_height_origin - 1500.0 * m;
 // quantity_point bad = average_height_origin - 1701.0 * m;  // ❌
 ```
 
+A point is translated into the frame of its bounded ancestor by the offset to that
+ancestor. With an integral representation, the point's quantity type must hold that offset
+exactly, as it must hold the bounds (see
+[Bounds the Point Can Hold](#bounds-the-point-can-hold)): an `int` point measured from an
+origin 0.5 m above its bounded ancestor, or an `int` kilometre point 1500 m above it, is
+rejected. With a floating-point representation, rounding the offset is accepted.
+
 When a `relative_point_origin` defines its **own bounds**, they are additionally checked at
 compile time to nest within the bounds of the nearest bounded origin above it (see the
 _Hierarchical bounds validation_ note in the
@@ -823,8 +857,13 @@ _Hierarchical bounds validation_ note in the
     ```
 
     This works because the policy struct exposes public `min` and `max` data members, which
-    `quantity_point::min()` and `max()` access to provide meaningful bounds. Without a bounds
-    policy, `std::numeric_limits` delegates to the representation type's limits.
+    `quantity_point::min()` and `max()` access to provide meaningful bounds. A relative
+    origin without bounds of its own reports those of its nearest bounded ancestor,
+    translated into its frame. With a floating-point representation the translation rounds,
+    so `min()` and `max()` report the lowest and highest values that ancestor's bounds
+    accept, which can differ from the translated bound by the rounding of each offset.
+    Without a bounds policy, `std::numeric_limits` delegates to the representation type's
+    limits.
 
 ### Validating Untrusted Values
 
@@ -832,8 +871,8 @@ A value read from a sensor, a bus, or persistent storage often has to be rejecte
 stopping the program. Catching the violation works only when the representation throws, and
 code built without exceptions has nothing to catch.
 
-`is_within_bounds` tells whether constructing the point from the same arguments would
-satisfy the bounds. It doesn't construct the point:
+The static member function `is_within_bounds` tells whether constructing the point from
+the same arguments would satisfy the bounds. It doesn't construct the point:
 
 ```cpp
 inline constexpr struct trim_zero :
@@ -844,18 +883,18 @@ using trim_angle =
 
 std::optional<trim_angle> make_trim(quantity<si::degree> raw)
 {
-  if (!is_within_bounds<trim_angle>(raw, trim_zero)) return std::nullopt;
+  if (!trim_angle::is_within_bounds(raw, trim_zero)) return std::nullopt;
   return trim_angle{raw, trim_zero};
 }
 ```
 
-Where `<expected>` is available (C++23), `try_make` does the same in one call and returns
-a rejection as an error value:
+Where `<expected>` is available (C++23), the static member function `try_make` does the same
+in one call and returns a rejection as an error value:
 
 ```cpp
 std::expected<trim_angle, bounds_violation> try_make_trim(quantity<si::degree> raw)
 {
-  return try_make<trim_angle>(raw, trim_zero);
+  return trim_angle::try_make(raw, trim_zero);
 }
 ```
 
@@ -944,8 +983,8 @@ inline constexpr struct tuning_zero :
 
 using tx_frequency = quantity_point<isq::frequency[GHz], tuning_zero>;
 
-static_assert(is_within_bounds<tx_frequency>(2.45 * GHz, tuning_zero));
-static_assert(!is_within_bounds<tx_frequency>(3. * GHz, tuning_zero));
+static_assert(tx_frequency::is_within_bounds(2.45 * GHz, tuning_zero));
+static_assert(!tx_frequency::is_within_bounds(3. * GHz, tuning_zero));
 ```
 
 Its `min` and `max` declare the outer ends of the domain, which `quantity_point::min()` and
@@ -964,7 +1003,8 @@ Its `min` and `max` declare the outer ends of the domain, which `quantity_point:
     user-defined checking policy is compared by its `min` and `max` as well, and its
     predicate is not consulted. A value inside an origin's own bounds therefore lies between
     the `min` and `max` of every bounded origin above it, up to rounding with floating-point
-    offsets.
+    offsets. Each floating-point offset in the chain rounds, so a value at the edge of a
+    child's range can end up one ulp outside an ancestor's range several levels up.
 
     Defining the origin or naming a point type doesn't trigger the check. It fires when the
     origin's bounds are first used, for example when a point is constructed from a value, in
@@ -1214,7 +1254,7 @@ A _point_ with a custom origin has no unique numerical representation, so its va
 requested from an explicit origin instead:
 
 ```cpp
-double above_sea_level = altitude.quantity_from(sea_level).numerical_value_in(m);
+double above_sea_level = altitude.delta_from(sea_level).numerical_value_in(m);
 ```
 
 

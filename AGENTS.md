@@ -164,11 +164,25 @@ code:
   the namespace: an entity can stay in `mp_units::detail` while living in a public
   header, since being reachable to importers and being supported API are different
   things.
+- **Rejected alternatives go in the FAQ, not the User's Guide.** The guide is the Diátaxis
+  explanation: each chapter starts from the reader's problem and says why the design is
+  what it is. A "why is X missing?" or "why not Y?" answer belongs in
+  `docs/getting_started/faq.md`, and the guide links to that entry. See
+  [Documentation structure](CONTRIBUTING.md#documentation-structure).
 - **Never put an `#include` in the middle or at the end of a header.** When splitting a
   large header, decompose it into self-contained components in a linear dependency chain
   plus a thin aggregator whose includes all sit at the top, and keep the public aggregator
   path stable so existing include sites are unaffected. Propose the layout before carrying
   out such a split.
+- **A public API spelled the cheaper way carries a one-line comment saying why.** Where a
+  public concept, member, or signature deviates from the obvious or the best-practice
+  spelling because the obvious one compiles slower (`std::is_base_of_v` where
+  `std::derived_from` would be expected, a member read where the public accessor exists, a
+  variable template behind a concept so that its traits form one atom), the line next to
+  it states the reason in one sentence, with the number when there is one. The API is
+  reviewed by people who have not seen the measurements, and they ask exactly that
+  question. Add such a comment with every such change and never remove one; private code
+  under `detail` or `bits/` needs none.
 
 ## Git and GitHub
 
@@ -179,4 +193,4 @@ code:
   bodies, review comments, and job summaries are GitHub-flavored Markdown with hard line
   breaks enabled, so a newline inside a paragraph arrives as a `<br>` and source-wrapped prose
   renders as a ragged column. Only checked-in `docs/**/*.md` is wrapped, to 90 columns, where
-  MkDocs joins the soft breaks back together.
+  ProperDocs joins the soft breaks back together.

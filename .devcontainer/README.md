@@ -17,7 +17,8 @@ The development environment is built on a layered Docker image stack:
    Adds Conan 2.x and base compiler profiles
 4. **[`trainiteu/mp-units`](https://github.com/train-it-eu/docker-images/blob/main/mp-units/Dockerfile)**:
    **mp-units-specific extensions** including:
-   - Extended compiler matrix (GCC 12-15, Clang 16-21)
+   - Extended compiler matrix (GCC 12-16, Clang 16-18 and 20-24, each Clang with its own libc++),
+     set up by [`setup_compilers.sh`](setup_compilers.sh)
    - Python documentation ecosystem via pipx
    - Pre-configured Conan remotes and profiles for all compiler combinations
    - Development aliases and optimized build configuration
@@ -73,7 +74,7 @@ The development environment includes all compilers and tools used for comprehens
 - **Standard Library**: libc++-18 for backward compatibility with clang-16
 - **Build Tools**: CMake, Ninja, Conan package manager
 - **Code Quality**: clang-format, clang-tidy, include-what-you-use
-- **Documentation**: MkDocs with Material theme
+- **Documentation**: ProperDocs with Material theme
 - **VS Code Extensions**: C++ IntelliSense, CMake Tools, Python support
 - **Pre-configured Conan Profiles**: All compiler configurations ready to use
 - **Pre-compiled dependencies**: Conan cache is persistent and pre-compiled dependencies
@@ -118,14 +119,14 @@ that cache does not survive a rebuild, so the first run after one downloads
 again (about 45 MB, a few seconds).
 
 The generated pages are written to `docs/reference/api_reference/mrdocs/` and
-are not committed. `mkdocs serve` shows whatever was generated last, so run the
+are not committed. `properdocs serve` shows whatever was generated last, so run the
 script again after changing a header you want to see documented.
 
 ### Documentation
 
 ```bash
 # Serve documentation locally
-mkdocs serve
+properdocs serve
 ```
 
 The documentation will be available at `http://localhost:8000` and will
