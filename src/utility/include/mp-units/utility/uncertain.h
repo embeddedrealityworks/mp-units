@@ -36,6 +36,7 @@
 import std;
 #else
 #include <cmath>
+#include <compare>
 #include <concepts>
 #include <iosfwd>
 #include <string>
@@ -47,8 +48,28 @@ import std;
 
 namespace mp_units::utility {
 
+namespace detail {
+
+// A quantity or a point whose representation is the `uncertain` specialization `U`, or its exact
+// `value_type`. The other operand of a hidden friend of `U` may be exact, and requiring one of these
+// two representations keeps the friends of two different `uncertain` specializations from both
+// being viable for the same call.
+template<typename Q, typename U>
+concept MeasuredOrExact = std::same_as<typename Q::rep, U> || std::same_as<typename Q::rep, typename U::value_type>;
+
+// A measured quantity or point with the representation `U`, and two exact limits it compares with
+template<typename Val, typename Lower, typename Upper, typename U>
+concept BoundedBy = (mp_units::Quantity<Val> || mp_units::QuantityPoint<Val>) && std::same_as<typename Val::rep, U> &&
+                    requires(const Val& val, const Lower& lower_limit, const Upper& upper_limit) {
+                      { lower_limit <= val } -> std::convertible_to<bool>;
+                      { val <= upper_limit } -> std::convertible_to<bool>;
+                      { upper_limit < lower_limit } -> std::convertible_to<bool>;
+                    };
+
+}  // namespace detail
+
 /**
- * @brief A representation type for values with uncertainties
+ * A representation type for values with uncertainties
  *
  * This class represents a value with its associated uncertainty (standard deviation),
  * providing automatic uncertainty propagation through mathematical operations.
@@ -114,9 +135,12 @@ namespace mp_units::utility {
 //   `RealScalar` does not imply it: it requires `std::copyable` and `std::equality_comparable`
 //   rather than `std::regular`, so neither default-construction nor construction from `int` is
 //   guaranteed. Stating it here also keeps the requirement independent of whether the
-//   precondition macro expands to anything in a given configuration.
+//   precondition macro expands to anything in a given configuration,
+// - `std::three_way_comparable` is what the order of `uncertain<T>` is defined by: it compares the
+//   central values with `<=>`.
 MP_UNITS_EXPORT template<typename T>
-  requires RealScalar<T> && (!disable_representation<T>) && requires { representation_values<T>::zero(); }
+  requires RealScalar<T> && (!disable_representation<T>) && requires { representation_values<T>::zero(); } &&
+           std::three_way_comparable<T>
 class uncertain {
 public:
   using value_type = T;
@@ -124,7 +148,7 @@ public:
   [[nodiscard]] uncertain() = default;
 
   /**
-   * @brief Converts an exact value to an uncertain one (value ± 0)
+   * Converts an exact value to an uncertain one (value ± 0)
    *
    * Intentionally implicit - an exact value is losslessly representable as an uncertain value
    * with a zero uncertainty, which lets exact quantities join uncertainty propagation in
@@ -134,46 +158,231 @@ public:
   [[nodiscard]] constexpr explicit(false) uncertain(value_type val) : value_(std::move(val)) {}
 
   /**
-   * @brief Constructs an uncertain value
+   * Constructs an uncertain value
    *
    * @param val The central value
    * @param err The absolute standard uncertainty (must be non-negative)
    */
   // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-  [[nodiscard]] constexpr explicit uncertain(value_type val, value_type err) :
+  // The predicate names the parameter, not the member: a constructor's contract is checked before
+  // the member initializers run, and naming `uncertainty_` there is ill-formed ("'this' required
+  // when accessing a member").
+  [[nodiscard]] constexpr explicit uncertain(value_type val, value_type err)
+    MP_UNITS_PRE(!(err < representation_values<value_type>::zero())) :
       value_(std::move(val)), uncertainty_(std::move(err))
   {
-    MP_UNITS_PRECONDITION(uncertainty_ >= representation_values<value_type>::zero());
+    MP_UNITS_EXPECTS(!(err < representation_values<value_type>::zero()));
   }
 
-  /// @brief Returns the central value
+  /// Returns the central value
   [[nodiscard]] constexpr const value_type& value() const { return value_; }
 
-  /// @brief Returns the absolute uncertainty (standard deviation)
+  /// Returns the absolute uncertainty (standard deviation)
   [[nodiscard]] constexpr const value_type& uncertainty() const { return uncertainty_; }
 
-  /// @brief Returns the relative standard uncertainty (σ/|x|)
+  /// Returns the relative standard uncertainty (σ/|x|)
   ///
   /// The absolute value follows GUM and the VIM: a relative standard uncertainty is a magnitude
   /// and is never negative, while the central value may well be (CODATA publishes negative
   /// magnetic moments and g-factors).
+  // A zero central value is only a problem for an integral representation, where the division is
+  // undefined; `uncertain<int>` is a supported instantiation. For a floating-point one the result
+  // is an infinity, which is the honest answer for a relative uncertainty about zero. Written as a
+  // disjunction rather than an `if constexpr` so it can sit on the declaration.
   [[nodiscard]] constexpr value_type relative_uncertainty() const
+    MP_UNITS_PRE(treat_as_floating_point<value_type> || value() != representation_values<value_type>::zero())
   {
+    MP_UNITS_EXPECTS(treat_as_floating_point<value_type> || value() != representation_values<value_type>::zero());
     using std::abs;
     return uncertainty() / abs(value());
   }
 
-  /// @brief Returns the lower bound of the uncertainty interval (value - σ)
+  /// Returns the lower bound of the uncertainty interval (value - σ)
   [[nodiscard]] constexpr value_type lower_bound() const { return value() - uncertainty(); }
 
-  /// @brief Returns the upper bound of the uncertainty interval (value + σ)
+  /// Returns the upper bound of the uncertainty interval (value + σ)
   [[nodiscard]] constexpr value_type upper_bound() const { return value() + uncertainty(); }
 
-  /// @brief Unary negation (uncertainty unchanged)
+  /**
+   * Returns the expanded uncertainty U = k·σ (GUM 6.2.1)
+   *
+   * @param coverage_factor The coverage factor `k`. The default `2` gives a coverage probability
+   *        of about 95 % for a normal distribution (GUM 6.3.3).
+   */
+  [[nodiscard]] constexpr value_type expanded_uncertainty(value_type coverage_factor = static_cast<value_type>(2)) const
+    MP_UNITS_PRE(!(coverage_factor < representation_values<value_type>::zero()))
+  {
+    MP_UNITS_EXPECTS(!(coverage_factor < representation_values<value_type>::zero()));
+    return coverage_factor * uncertainty();
+  }
+
+  // Deferred reason 1 for every hidden friend below that takes a coverage factor.
+
+  /**
+   * Checks whether two measured values agree within their uncertainties
+   *
+   * Metrological compatibility (VIM 2.47): `|x - y| <= k·√(σ_x² + σ_y²)`. An exact value is the
+   * case `σ = 0`, so the same function checks a measurement against a reference value. The two
+   * values are taken as independent. Unlike `==`, the relation is not transitive.
+   *
+   * @param coverage_factor The coverage factor, `2` (about 95 %) by default
+   */
+  [[nodiscard]] friend constexpr bool metrologically_compatible(const uncertain& lhs, const uncertain& rhs,
+                                                                value_type coverage_factor = static_cast<value_type>(2))
+    MP_UNITS_PRE_DEFERRED(!(coverage_factor < representation_values<value_type>::zero()))
+  {
+    MP_UNITS_PRE_DEFERRED_COMPAT(!(coverage_factor < representation_values<value_type>::zero()));
+    using std::abs;
+    using std::hypot;
+    return abs(lhs.value() - rhs.value()) <= coverage_factor * hypot(lhs.uncertainty(), rhs.uncertainty());
+  }
+
+  /**
+   * Checks whether the whole expanded uncertainty interval lies within the limits
+   *
+   * Conformity with a specification (JCGM 106): the value is accepted only if
+   * `[value - U, value + U]`, with `U = k·σ`, fits inside the limits.
+   *
+   * @param coverage_factor The coverage factor, `2` (about 95 %) by default
+   */
+  [[nodiscard]] friend constexpr bool certainly_within(const uncertain& val, const value_type& lower_limit,
+                                                       const value_type& upper_limit,
+                                                       value_type coverage_factor = static_cast<value_type>(2))
+    MP_UNITS_PRE_DEFERRED(!(upper_limit < lower_limit) &&
+                          !(coverage_factor < representation_values<value_type>::zero()))
+  {
+    MP_UNITS_PRE_DEFERRED_COMPAT(!(upper_limit < lower_limit) &&
+                                 !(coverage_factor < representation_values<value_type>::zero()));
+    const value_type expanded = val.expanded_uncertainty(coverage_factor);
+    return lower_limit <= val.value() - expanded && val.value() + expanded <= upper_limit;
+  }
+
+  /**
+   * Checks whether the expanded uncertainty interval overlaps the limits
+   *
+   * The value can't be rejected as outside the limits: `[value - U, value + U]`, with
+   * `U = k·σ`, has at least one point in common with them.
+   *
+   * @param coverage_factor The coverage factor, `2` (about 95 %) by default
+   */
+  [[nodiscard]] friend constexpr bool possibly_within(const uncertain& val, const value_type& lower_limit,
+                                                      const value_type& upper_limit,
+                                                      value_type coverage_factor = static_cast<value_type>(2))
+    MP_UNITS_PRE_DEFERRED(!(upper_limit < lower_limit) &&
+                          !(coverage_factor < representation_values<value_type>::zero()))
+  {
+    MP_UNITS_PRE_DEFERRED_COMPAT(!(upper_limit < lower_limit) &&
+                                 !(coverage_factor < representation_values<value_type>::zero()));
+    const value_type expanded = val.expanded_uncertainty(coverage_factor);
+    return val.value() - expanded <= upper_limit && lower_limit <= val.value() + expanded;
+  }
+
+  /**
+   * Checks whether two measured quantities, or two measured points, agree within their
+   *        uncertainties
+   *
+   * The quantity form of `metrologically_compatible`. Both operands are converted to their
+   * common unit by `lhs - rhs`, including the uncertainty of a conversion factor built from a
+   * measured constant. An operand may be exact, with `value_type` as its representation.
+   *
+   * @param coverage_factor The coverage factor, `2` (about 95 %) by default
+   */
+  template<typename Lhs, typename Rhs>
+    requires((mp_units::Quantity<Lhs> && mp_units::Quantity<Rhs>) ||
+             (mp_units::QuantityPoint<Lhs> && mp_units::QuantityPoint<Rhs>)) &&
+            detail::MeasuredOrExact<Lhs, uncertain> && detail::MeasuredOrExact<Rhs, uncertain> &&
+            requires(const Lhs& lhs, const Rhs& rhs) { lhs - rhs; }
+  [[nodiscard]] friend constexpr bool metrologically_compatible(const Lhs& lhs, const Rhs& rhs,
+                                                                value_type coverage_factor)
+    MP_UNITS_PRE_DEFERRED(!(coverage_factor < representation_values<value_type>::zero()))
+  {
+    MP_UNITS_PRE_DEFERRED_COMPAT(!(coverage_factor < representation_values<value_type>::zero()));
+    const auto difference = lhs - rhs;
+    return metrologically_compatible(difference.numerical_value_ref_in(difference.unit),
+                                     representation_values<value_type>::zero(), coverage_factor);
+  }
+
+  // The coverage factor of the quantity forms defaults through an overload: MSVC 19.51 rejects
+  // a default argument of a template hidden friend that names a type (C2061).
+
+  /// `metrologically_compatible(lhs, rhs, 2)`
+  template<typename Lhs, typename Rhs>
+    requires((mp_units::Quantity<Lhs> && mp_units::Quantity<Rhs>) ||
+             (mp_units::QuantityPoint<Lhs> && mp_units::QuantityPoint<Rhs>)) &&
+            detail::MeasuredOrExact<Lhs, uncertain> && detail::MeasuredOrExact<Rhs, uncertain> &&
+            requires(const Lhs& lhs, const Rhs& rhs) { lhs - rhs; }
+  [[nodiscard]] friend constexpr bool metrologically_compatible(const Lhs& lhs, const Rhs& rhs)
+  {
+    return metrologically_compatible(lhs, rhs, static_cast<value_type>(2));
+  }
+
+  /**
+   * Checks whether the whole expanded uncertainty interval of a measured quantity, or of
+   *        a measured point, lies within the limits
+   *
+   * The quantity form of `certainly_within`. The limits are exact, and are compared in their
+   * common unit with the value.
+   *
+   * @param coverage_factor The coverage factor, `2` (about 95 %) by default
+   */
+  template<typename Val, typename Lower, typename Upper>
+    requires detail::BoundedBy<Val, Lower, Upper, uncertain>
+  [[nodiscard]] friend constexpr bool certainly_within(const Val& val, const Lower& lower_limit,
+                                                       const Upper& upper_limit, value_type coverage_factor)
+    MP_UNITS_PRE_DEFERRED(!(upper_limit < lower_limit) &&
+                          !(coverage_factor < representation_values<value_type>::zero()))
+  {
+    MP_UNITS_PRE_DEFERRED_COMPAT(!(upper_limit < lower_limit) &&
+                                 !(coverage_factor < representation_values<value_type>::zero()));
+    const auto expanded = expanded_quantity(val, coverage_factor);
+    return lower_limit <= val - expanded && val + expanded <= upper_limit;
+  }
+
+  /// `certainly_within(val, lower_limit, upper_limit, 2)`
+  template<typename Val, typename Lower, typename Upper>
+    requires detail::BoundedBy<Val, Lower, Upper, uncertain>
+  [[nodiscard]] friend constexpr bool certainly_within(const Val& val, const Lower& lower_limit,
+                                                       const Upper& upper_limit)
+  {
+    return certainly_within(val, lower_limit, upper_limit, static_cast<value_type>(2));
+  }
+
+  /**
+   * Checks whether the expanded uncertainty interval of a measured quantity, or of a
+   *        measured point, overlaps the limits
+   *
+   * The quantity form of `possibly_within`. The limits are exact, and are compared in their
+   * common unit with the value.
+   *
+   * @param coverage_factor The coverage factor, `2` (about 95 %) by default
+   */
+  template<typename Val, typename Lower, typename Upper>
+    requires detail::BoundedBy<Val, Lower, Upper, uncertain>
+  [[nodiscard]] friend constexpr bool possibly_within(const Val& val, const Lower& lower_limit,
+                                                      const Upper& upper_limit, value_type coverage_factor)
+    MP_UNITS_PRE_DEFERRED(!(upper_limit < lower_limit) &&
+                          !(coverage_factor < representation_values<value_type>::zero()))
+  {
+    MP_UNITS_PRE_DEFERRED_COMPAT(!(upper_limit < lower_limit) &&
+                                 !(coverage_factor < representation_values<value_type>::zero()));
+    const auto expanded = expanded_quantity(val, coverage_factor);
+    return val - expanded <= upper_limit && lower_limit <= val + expanded;
+  }
+
+  /// `possibly_within(val, lower_limit, upper_limit, 2)`
+  template<typename Val, typename Lower, typename Upper>
+    requires detail::BoundedBy<Val, Lower, Upper, uncertain>
+  [[nodiscard]] friend constexpr bool possibly_within(const Val& val, const Lower& lower_limit,
+                                                      const Upper& upper_limit)
+  {
+    return possibly_within(val, lower_limit, upper_limit, static_cast<value_type>(2));
+  }
+
+  /// Unary negation (uncertainty unchanged)
   [[nodiscard]] constexpr uncertain operator-() const { return uncertain(-value(), uncertainty()); }
 
   /**
-   * @brief Addition of two uncertain values
+   * Addition of two uncertain values
    * @note Assumes independent values. Formula: σ² = σ_x² + σ_y²
    */
   [[nodiscard]] friend constexpr uncertain operator+(const uncertain& lhs, const uncertain& rhs)
@@ -183,7 +392,7 @@ public:
   }
 
   /**
-   * @brief Subtraction of two uncertain values
+   * Subtraction of two uncertain values
    * @note Assumes independent values. Formula: σ² = σ_x² + σ_y²
    * @warning For correlated values (e.g., x - x), this will incorrectly give non-zero uncertainty.
    */
@@ -194,7 +403,7 @@ public:
   }
 
   /**
-   * @brief Multiplication of two uncertain values
+   * Multiplication of two uncertain values
    *
    * @note Assumes independent values. Formula: σ_f² = (y·σ_x)² + (x·σ_y)²
    * @note This is the absolute form of `(σ_f/f)² = (σ_x/x)² + (σ_y/y)²`. The two agree for
@@ -209,7 +418,7 @@ public:
   }
 
   /**
-   * @brief Multiplication by an exact scalar
+   * Multiplication by an exact scalar
    * @note The scalar is treated as exact (no uncertainty). Formula: σ_f = |k| × σ_x
    */
   [[nodiscard]] friend constexpr uncertain operator*(const uncertain& lhs,
@@ -220,7 +429,7 @@ public:
                      static_cast<value_type>(abs(value) * lhs.uncertainty()));
   }
 
-  /// @brief Multiplication by an exact scalar (commutative)
+  /// Multiplication by an exact scalar (commutative)
   [[nodiscard]] friend constexpr uncertain operator*(const std::convertible_to<value_type> auto& value,
                                                      const uncertain& rhs)
   {
@@ -229,7 +438,7 @@ public:
   }
 
   /**
-   * @brief Division of two uncertain values
+   * Division of two uncertain values
    *
    * @note Assumes independent values. Formula: σ_f² = (σ_x/y)² + (x·σ_y/y²)²
    * @note The absolute form is used for the same reason as in `operator*`: it stays well-defined
@@ -243,7 +452,7 @@ public:
   }
 
   /**
-   * @brief Division by an exact scalar
+   * Division by an exact scalar
    * @note The scalar is treated as exact (no uncertainty). Formula: σ_f = σ_x / |k|
    */
   [[nodiscard]] friend constexpr uncertain operator/(const uncertain& lhs,
@@ -255,7 +464,7 @@ public:
   }
 
   /**
-   * @brief Division of an exact scalar by an uncertain value
+   * Division of an exact scalar by an uncertain value
    * @note Formula: σ_f = |f| × (σ_x / x)
    */
   [[nodiscard]] friend constexpr uncertain operator/(const std::convertible_to<value_type> auto& value,
@@ -267,7 +476,7 @@ public:
   }
 
   /**
-   * @brief Adds the uncertainty of a unit conversion factor to the value
+   * Adds the uncertainty of a unit conversion factor to the value
    *
    * Implements the `fold_conversion_uncertainty` customization point. The two are taken as
    * independent, so they combine in quadrature: σ' = √(σ² + (x·u_r)²).
@@ -282,15 +491,29 @@ public:
   }
 
   /**
-   * @brief Comparison of two uncertain values
+   * Comparison of two uncertain values
    *
    * `RealScalar` requires `std::totally_ordered`, so a real scalar representation cannot opt out
-   * of ordering. The order is primarily by the central value, with the uncertainty as a
-   * tie-breaker, which keeps it total and consistent with equality. It is structural, not
-   * statistical: values with overlapping uncertainty intervals still compare as unequal. For
-   * interval-aware comparisons use the `lower_bound()`/`upper_bound()` observers.
+   * of ordering. Both the order and equality compare the central values only, so two values with
+   * the same central value and different uncertainties are equal, and the order is at most a weak
+   * one. A comparison with an exact value, such as a bound or zero, depends on the central value
+   * alone. The comparison is not statistical: two values with different central values compare as
+   * unequal even when their uncertainty intervals overlap. `metrologically_compatible` tells whether
+   * two values agree within their uncertainties, and `certainly_within` and `possibly_within` tell
+   * whether a value lies within limits. Compare `uncertainty()` to tell two values with the same
+   * central value apart.
    */
-  [[nodiscard]] constexpr auto operator<=>(const uncertain&) const = default;
+  [[nodiscard]] friend constexpr bool operator==(const uncertain& lhs, const uncertain& rhs)
+  {
+    return lhs.value() == rhs.value();
+  }
+
+  [[nodiscard]] friend constexpr std::common_comparison_category_t<std::compare_three_way_result_t<value_type>,
+                                                                   std::weak_ordering>
+  operator<=>(const uncertain& lhs, const uncertain& rhs)
+  {
+    return lhs.value() <=> rhs.value();
+  }
 
   friend std::ostream& operator<<(std::ostream& os, const uncertain& arg)
   {
@@ -298,7 +521,7 @@ public:
   }
 
   /**
-   * @brief Absolute value of an uncertain value
+   * Absolute value of an uncertain value
    * @note Uncertainty is preserved unchanged.
    */
   [[nodiscard]] friend constexpr uncertain abs(const uncertain& arg)
@@ -309,7 +532,7 @@ public:
   }
 
   /**
-   * @brief Power function with runtime exponent
+   * Power function with runtime exponent
    *
    * @param base The uncertain value to raise to a power
    * @param exponent The exponent (exact value, no uncertainty)
@@ -328,7 +551,7 @@ public:
   }
 
   /**
-   * @brief Square root of an uncertain value
+   * Square root of an uncertain value
    *
    * @note Formula: σ_f = σ_x / (2√x)
    * @note This is equivalent to pow(arg, 0.5) but more efficient.
@@ -342,7 +565,7 @@ public:
   }
 
   /**
-   * @brief Exponential function of an uncertain value
+   * Exponential function of an uncertain value
    *
    * @note Formula: if f = exp(x), then σ_f = |exp(x) × σ_x| = |f × σ_x|
    * @warning Uncertainty grows exponentially with the value. For large x, this can lead
@@ -358,7 +581,7 @@ public:
   }
 
   /**
-   * @brief Natural logarithm of an uncertain value
+   * Natural logarithm of an uncertain value
    *
    * @note Formula: if f = ln(x), then σ_f = |σ_x / x| = σ_x / x (for positive x)
    * @note Relative uncertainty in x becomes absolute uncertainty in ln(x).
@@ -372,7 +595,7 @@ public:
   }
 
   /**
-   * @brief Common (base-10) logarithm of an uncertain value
+   * Common (base-10) logarithm of an uncertain value
    * @note Formula: σ_f = |σ_x / (x × ln(10))|
    */
   [[nodiscard]] friend constexpr uncertain log10(const uncertain& arg)
@@ -385,7 +608,7 @@ public:
   }
 
   /**
-   * @brief Binary (base-2) logarithm of an uncertain value
+   * Binary (base-2) logarithm of an uncertain value
    * @note Formula: σ_f = |σ_x / (x × ln(2))|
    */
   [[nodiscard]] friend constexpr uncertain log2(const uncertain& arg)
@@ -398,7 +621,7 @@ public:
   }
 
   /**
-   * @brief Cube root of an uncertain value
+   * Cube root of an uncertain value
    * @note Formula: if f = ∛x, then σ_f = σ_x / (3 × f²)
    */
   [[nodiscard]] friend constexpr uncertain cbrt(const uncertain& arg)
@@ -411,7 +634,7 @@ public:
   }
 
   /**
-   * @brief Sine of an uncertain value (argument in radians)
+   * Sine of an uncertain value (argument in radians)
    * @note Formula: σ_f = |cos(x)| × σ_x
    */
   [[nodiscard]] friend constexpr uncertain sin(const uncertain& arg)
@@ -424,7 +647,7 @@ public:
   }
 
   /**
-   * @brief Cosine of an uncertain value (argument in radians)
+   * Cosine of an uncertain value (argument in radians)
    * @note Formula: σ_f = |sin(x)| × σ_x
    */
   [[nodiscard]] friend constexpr uncertain cos(const uncertain& arg)
@@ -437,7 +660,7 @@ public:
   }
 
   /**
-   * @brief Tangent of an uncertain value (argument in radians)
+   * Tangent of an uncertain value (argument in radians)
    * @note Formula: σ_f = σ_x / cos²(x)
    */
   [[nodiscard]] friend constexpr uncertain tan(const uncertain& arg)
@@ -451,7 +674,7 @@ public:
   }
 
   /**
-   * @brief Arc sine of an uncertain value (result in radians)
+   * Arc sine of an uncertain value (result in radians)
    * @note Formula: σ_f = σ_x / √(1 - x²)
    */
   [[nodiscard]] friend constexpr uncertain asin(const uncertain& arg)
@@ -464,7 +687,7 @@ public:
   }
 
   /**
-   * @brief Arc cosine of an uncertain value (result in radians)
+   * Arc cosine of an uncertain value (result in radians)
    * @note Formula: σ_f = σ_x / √(1 - x²), the same magnitude as for `asin`
    */
   [[nodiscard]] friend constexpr uncertain acos(const uncertain& arg)
@@ -477,7 +700,7 @@ public:
   }
 
   /**
-   * @brief Arc tangent of an uncertain value (result in radians)
+   * Arc tangent of an uncertain value (result in radians)
    * @note Formula: σ_f = σ_x / (1 + x²)
    */
   [[nodiscard]] friend constexpr uncertain atan(const uncertain& arg)
@@ -489,7 +712,7 @@ public:
   }
 
   /**
-   * @brief Two-argument arc tangent (result in radians)
+   * Two-argument arc tangent (result in radians)
    *
    * @note Assumes independent values. Formula: σ_f² = ((x·σ_y)² + (y·σ_x)²) / (x² + y²)²
    */
@@ -504,12 +727,23 @@ public:
   }
 
 private:
+  // `k·σ` of a measured quantity or point, as an exact quantity in its unit
+  template<typename Val>
+  [[nodiscard]] static constexpr auto expanded_quantity(const Val& val, const value_type& coverage_factor)
+  {
+    if constexpr (mp_units::QuantityPoint<Val>)
+      return expanded_quantity(val.quantity_ref_from(Val::point_origin), coverage_factor);
+    else
+      return mp_units::quantity<Val::reference, value_type>{
+        val.numerical_value_ref_in(Val::unit).expanded_uncertainty(coverage_factor), Val::reference};
+  }
+
   value_type value_{};
   value_type uncertainty_{};
 };
 
 /**
- * @brief Returns a measured constant as a quantity with an `uncertain` representation
+ * Returns a measured constant as a quantity with an `uncertain` representation
  *
  * The uncertainty of a measured constant is relational: expressed in its own unit the constant
  * is exactly `1`, and the uncertainty belongs to the conversion factor between that unit and
@@ -560,7 +794,7 @@ struct scientific_parts {
 }
 
 /**
- * @brief Renders `value(digits)` as specified in ISO 80000-1:2022, 7.2.4
+ * Renders `value(digits)` as specified in ISO 80000-1:2022, 7.2.4
  *
  * The digits in parentheses are the standard uncertainty expressed in terms of the least
  * significant digits of the value (`23.4782(32)` means `23.4782 ± 0.0032`). Every rounding
@@ -667,7 +901,7 @@ struct std::common_type<U, mp_units::utility::uncertain<T>> {
 };
 
 /**
- * @brief Formatting support for `uncertain`
+ * Formatting support for `uncertain`
  *
  * By default both components are printed as `value ± uncertainty`, each formatted with the
  * `format-spec` of the underlying representation type.

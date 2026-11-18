@@ -61,7 +61,7 @@ namespace mp_units {
 // which is hosted-only.
 
 /**
- * @brief Computes the absolute value of a quantity
+ * Computes the absolute value of a quantity
  *
  * @param q Quantity being the base of the operation
  * @return Quantity The absolute value of a provided quantity
@@ -72,15 +72,18 @@ template<auto R, typename Rep>
            || requires(Rep v) { std::abs(v); }
 #endif
 [[nodiscard]] constexpr quantity<R, Rep> abs(const quantity<R, Rep>& q) noexcept
+  MP_UNITS_POST(r : detail::value_is_non_negative(r.numerical_value_ref_in(r.unit)))
 {
 #if MP_UNITS_HOSTED || __cpp_lib_freestanding_cstdlib >= 202306L
   using std::abs;
 #endif
-  return {static_cast<Rep>(abs(q.numerical_value_ref_in(q.unit))), R};
+  const quantity<R, Rep> result{static_cast<Rep>(abs(q.numerical_value_ref_in(q.unit))), R};
+  MP_UNITS_POST_COMPAT(detail::value_is_non_negative(result.numerical_value_ref_in(result.unit)));
+  return result;
 }
 
 /**
- * @brief Computes the value of a quantity raised to the `Num/Den` power
+ * Computes the value of a quantity raised to the `Num/Den` power
  *
  * Both the quantity value and its quantity specification are the base of the operation.
  *
@@ -99,7 +102,8 @@ template<std::intmax_t Num, std::intmax_t Den = 1, auto R, typename Rep>
                ;
   }
 [[nodiscard]] constexpr quantity<pow<Num, Den>(R), Rep> pow(const quantity<R, Rep>& q) noexcept
-
+  MP_UNITS_POST(r : !(Num % Den == 0 && (Num / Den) % 2 == 0) ||
+                detail::value_is_non_negative(r.numerical_value_ref_in(r.unit)))
 {
   if constexpr (Num == 0) {
     return {representation_values<Rep>::one(), pow<0>(R)};
@@ -109,14 +113,17 @@ template<std::intmax_t Num, std::intmax_t Den = 1, auto R, typename Rep>
 #if MP_UNITS_HOSTED
     using std::pow;
 #endif
-    return {
+    const quantity<pow<Num, Den>(R), Rep> result{
       static_cast<Rep>(pow(q.numerical_value_ref_in(q.unit), static_cast<double>(Num) / static_cast<double>(Den))),
       pow<Num, Den>(R)};
+    MP_UNITS_POST_COMPAT(!(Num % Den == 0 && (Num / Den) % 2 == 0) ||
+                         detail::value_is_non_negative(result.numerical_value_ref_in(result.unit)));
+    return result;
   }
 }
 
 /**
- * @brief Computes the square root of a quantity
+ * Computes the square root of a quantity
  *
  * Both the quantity value and its quantity specification are the base of the operation.
  *
@@ -129,15 +136,18 @@ template<auto R, typename Rep>
            || requires(Rep v) { std::sqrt(v); }
 #endif
 [[nodiscard]] constexpr quantity<sqrt(R), Rep> sqrt(const quantity<R, Rep>& q) noexcept
+  MP_UNITS_POST(r : detail::value_is_non_negative(r.numerical_value_ref_in(r.unit)))
 {
 #if MP_UNITS_HOSTED
   using std::sqrt;
 #endif
-  return {static_cast<Rep>(sqrt(q.numerical_value_ref_in(q.unit))), sqrt(R)};
+  const quantity<sqrt(R), Rep> result{static_cast<Rep>(sqrt(q.numerical_value_ref_in(q.unit))), sqrt(R)};
+  MP_UNITS_POST_COMPAT(detail::value_is_non_negative(result.numerical_value_ref_in(result.unit)));
+  return result;
 }
 
 /**
- * @brief Computes the cubic root of a quantity
+ * Computes the cubic root of a quantity
  *
  * Both the quantity value and its quantity specification are the base of the operation.
  *
@@ -158,7 +168,7 @@ template<auto R, typename Rep>
 }
 
 /**
- * @brief Computes Euler's raised to the given power
+ * Computes Euler's raised to the given power
  *
  * @note Such an operation has sense only for a dimensionless quantity.
  *
@@ -171,16 +181,19 @@ template<ReferenceOf<dimensionless> auto R, typename Rep>
            || requires(Rep v) { std::exp(v); }
 #endif
 [[nodiscard]] constexpr quantity<R, Rep> exp(const quantity<R, Rep>& q)
+  MP_UNITS_POST(r : detail::value_is_non_negative(r.numerical_value_ref_in(r.unit)))
 {
 #if MP_UNITS_HOSTED
   using std::exp;
 #endif
-  return value_cast<get_unit(R)>(
+  const quantity<R, Rep> result = value_cast<get_unit(R)>(
     quantity{static_cast<Rep>(exp(q.numerical_value_in(q.unit))), detail::clone_reference_with<one>(R)});
+  MP_UNITS_POST_COMPAT(detail::value_is_non_negative(result.numerical_value_ref_in(result.unit)));
+  return result;
 }
 
 /**
- * @brief Determines if a quantity is finite.
+ * Determines if a quantity is finite.
  *
  * @param a: Quantity to analyze.
  * @return bool: Whether the quantity is finite or not.
@@ -199,7 +212,7 @@ template<auto R, typename Rep>
 }
 
 /**
- * @brief Determines if a quantity point is finite.
+ * Determines if a quantity point is finite.
  *
  * @param a: Quantity point to analyze.
  * @return bool: Whether the quantity point is finite or not.
@@ -212,7 +225,7 @@ template<auto R, auto PO, typename Rep>
 }
 
 /**
- * @brief Determines if a quantity is infinite.
+ * Determines if a quantity is infinite.
  *
  * @param a: Quantity to analyze.
  * @return bool: Whether the quantity is infinite or not.
@@ -231,7 +244,7 @@ template<auto R, typename Rep>
 }
 
 /**
- * @brief Determines if a quantity point is infinite.
+ * Determines if a quantity point is infinite.
  *
  * @param a: Quantity point to analyze.
  * @return bool: Whether the quantity point is infinite or not.
@@ -245,7 +258,7 @@ template<auto R, auto PO, typename Rep>
 
 
 /**
- * @brief Determines if a quantity is a nan.
+ * Determines if a quantity is a nan.
  *
  * @param a: Quantity to analyze.
  * @return bool: Whether the quantity is a NaN or not.
@@ -265,7 +278,7 @@ template<auto R, typename Rep>
 
 
 /**
- * @brief Determines if a quantity point is a nan.
+ * Determines if a quantity point is a nan.
  *
  * @param a: Quantity point to analyze.
  * @return bool: Whether the quantity point is a NaN or not.
@@ -278,7 +291,7 @@ template<auto R, auto PO, typename Rep>
 }
 
 /**
- * @brief Computes the fma of 3 quantities
+ * Computes the fma of 3 quantities
  *
  * @param a: Multiplicand
  * @param x: Multiplicand
@@ -307,7 +320,7 @@ fma(const quantity<R, Rep1>& a, const quantity<S, Rep2>& x, const quantity<T, Re
 }
 
 /**
- * @brief Computes the fma of 2 quantities and a quantity point
+ * Computes the fma of 2 quantities and a quantity point
  *
  * @param a: Multiplicand
  * @param x: Multiplicand
@@ -336,7 +349,7 @@ fma(const quantity<R, Rep1>& a, const quantity<S, Rep2>& x, const quantity_point
 }
 
 /**
- * @brief Computes the floating-point remainder of the division operation x / y.
+ * Computes the floating-point remainder of the division operation x / y.
  */
 template<auto R1, typename Rep1, auto R2, typename Rep2>
   requires detail::QuantitiesOfTheSameKind<quantity<R1, Rep1>, quantity<R2, Rep2>> && requires(Rep1 v1, Rep2 v2) {
@@ -359,7 +372,7 @@ template<auto R1, typename Rep1, auto R2, typename Rep2>
 }
 
 /**
- * @brief Computes the IEEE remainder of the floating point division operation x / y.
+ * Computes the IEEE remainder of the floating point division operation x / y.
  */
 template<auto R1, typename Rep1, auto R2, typename Rep2>
   requires detail::QuantitiesOfTheSameKind<quantity<R1, Rep1>, quantity<R2, Rep2>> && requires(Rep1 v1, Rep2 v2) {
@@ -383,7 +396,7 @@ template<auto R1, typename Rep1, auto R2, typename Rep2>
 
 
 /**
- * @brief Returns the epsilon of the quantity
+ * Returns the epsilon of the quantity
  *
  * The returned value is defined by a <tt>std::numeric_limits<typename Q::rep>::epsilon()</tt>.
  *
@@ -400,7 +413,7 @@ template<typename Rep, Reference R>
 }
 
 /**
- * @brief Computes the largest quantity with integer representation and unit type To with its number not greater than q
+ * Computes the largest quantity with integer representation and unit type To with its number not greater than q
  *
  * @tparam q Quantity being the base of the operation
  * @return Quantity The rounded quantity with unit type To
@@ -428,7 +441,7 @@ template<Unit auto To, auto R, typename Rep>
 }
 
 /**
- * @brief Computes the largest quantity point with integer representation and unit type To with its number not greater
+ * Computes the largest quantity point with integer representation and unit type To with its number not greater
  *        than qp
  *
  * @param qp QuantityPoint being the base of the operation
@@ -460,7 +473,7 @@ template<Unit auto To, auto R, auto PO, typename Rep>
 }
 
 /**
- * @brief Computes the smallest quantity with integer representation and unit type To with its number not less than q
+ * Computes the smallest quantity with integer representation and unit type To with its number not less than q
  *
  * @tparam q Quantity being the base of the operation
  * @return Quantity The rounded quantity with unit type To
@@ -488,7 +501,7 @@ template<Unit auto To, auto R, typename Rep>
 }
 
 /**
- * @brief Computes the smallest quantity point with integer representation and unit type To with its number not less
+ * Computes the smallest quantity point with integer representation and unit type To with its number not less
  *        than qp
  *
  * @param qp Quantity point being the base of the operation
@@ -520,7 +533,7 @@ template<Unit auto To, auto R, auto PO, typename Rep>
 }
 
 /**
- * @brief Computes the nearest quantity with integer representation and unit type `To` to `q`
+ * Computes the nearest quantity with integer representation and unit type `To` to `q`
  *
  * Returns the value `res` representable in `To` unit that is the closest to `q`. If there are two
  * such values, returns the even value (that is, the value `res` such that `res % 2 == 0`).
@@ -541,6 +554,13 @@ template<Unit auto To, auto R, typename Rep>
   const auto diff0 = q - res_low;
   const auto diff1 = res_high - q;
   if (diff0 == diff1) {
+    // The parity test casts to `std::int64_t`, which is undefined when the value does not fit, and
+    // that is reachable rather than theoretical. At a magnitude where the ULP is already at least 1
+    // the value is integral, `res_high` compares equal to `res_low`, and the difference test above
+    // reports a tie that is not one: `round<si::metre>(1e300 * m)` arrives here and casts 1e300 to
+    // an integer. Such a value is its own rounding, so return it instead of asking which of two
+    // equal answers is even.
+    if (!detail::value_fits_in<std::int64_t>(res_low.numerical_value_ref_in(To))) return res_low;
     // TODO How to extend this to custom representation types?
     if (static_cast<std::int64_t>(res_low.numerical_value_ref_in(To)) & 1) return res_high;
     return res_low;
@@ -550,7 +570,7 @@ template<Unit auto To, auto R, typename Rep>
 }
 
 /**
- * @brief Computes the nearest quantity point with integer representation and unit type `To` to `qp`
+ * Computes the nearest quantity point with integer representation and unit type `To` to `qp`
  *
  * Returns the value `res` representable in `To` unit that is the closest to `qp`. If there are two
  * such values, returns the even value (that is, the value `res` such that `res % 2 == 0`).
@@ -572,6 +592,13 @@ template<Unit auto To, auto R, auto PO, typename Rep>
   const auto diff0 = qp - res_low;
   const auto diff1 = res_high - qp;
   if (diff0 == diff1) {
+    // The parity test casts to `std::int64_t`, which is undefined when the value does not fit, and
+    // that is reachable rather than theoretical. At a magnitude where the ULP is already at least 1
+    // the value is integral, `res_high` compares equal to `res_low`, and the difference test above
+    // reports a tie that is not one: `round<si::metre>(1e300 * m)` arrives here and casts 1e300 to
+    // an integer. Such a value is its own rounding, so return it instead of asking which of two
+    // equal answers is even.
+    if (!detail::value_fits_in<std::int64_t>(res_low.delta_from_zero().numerical_value_ref_in(To))) return res_low;
     // TODO How to extend this to custom representation types?
     if (static_cast<std::int64_t>(res_low.delta_from_zero().numerical_value_ref_in(To)) & 1) return res_high;
     return res_low;
@@ -581,7 +608,7 @@ template<Unit auto To, auto R, auto PO, typename Rep>
 }
 
 /**
- * @brief Computes the inverse of a quantity in a provided unit
+ * Computes the inverse of a quantity in a provided unit
  */
 template<Unit auto To, auto R, typename Rep>
 [[nodiscard]] constexpr Quantity auto inverse(const quantity<R, Rep>& q)
@@ -596,7 +623,7 @@ template<Unit auto To, auto R, typename Rep>
 }
 
 /**
- * @brief Computes the square root of the sum of the squares of x and y,
+ * Computes the square root of the sum of the squares of x and y,
  *        without undue overflow or underflow at intermediate stages of the computation
  */
 template<auto R1, typename Rep1, auto R2, typename Rep2>
@@ -610,17 +637,20 @@ template<auto R1, typename Rep1, auto R2, typename Rep2>
   }
 [[nodiscard]] constexpr QuantityOf<get_quantity_spec(get_common_reference(R1, R2))> auto hypot(
   const quantity<R1, Rep1>& x, const quantity<R2, Rep2>& y) noexcept
+  MP_UNITS_POST(r : detail::value_is_non_negative(r.numerical_value_ref_in(r.unit)))
 {
   constexpr auto ref = get_common_reference(R1, R2);
   constexpr auto unit = get_unit(ref);
 #if MP_UNITS_HOSTED
   using std::hypot;
 #endif
-  return quantity{hypot(x.numerical_value_in(unit), y.numerical_value_in(unit)), ref};
+  const quantity result{hypot(x.numerical_value_in(unit), y.numerical_value_in(unit)), ref};
+  MP_UNITS_POST_COMPAT(detail::value_is_non_negative(result.numerical_value_ref_in(result.unit)));
+  return result;
 }
 
 /**
- * @brief Computes the square root of the sum of the squares of x, y, and z,
+ * Computes the square root of the sum of the squares of x, y, and z,
  *        without undue overflow or underflow at intermediate stages of the computation
  */
 template<auto R1, typename Rep1, auto R2, typename Rep2, auto R3, typename Rep3>
@@ -634,17 +664,20 @@ template<auto R1, typename Rep1, auto R2, typename Rep2, auto R3, typename Rep3>
   }
 [[nodiscard]] constexpr QuantityOf<get_quantity_spec(get_common_reference(R1, R2, R3))> auto hypot(
   const quantity<R1, Rep1>& x, const quantity<R2, Rep2>& y, const quantity<R3, Rep3>& z) noexcept
+  MP_UNITS_POST(r : detail::value_is_non_negative(r.numerical_value_ref_in(r.unit)))
 {
   constexpr auto ref = get_common_reference(R1, R2, R3);
   constexpr auto unit = get_unit(ref);
 #if MP_UNITS_HOSTED
   using std::hypot;
 #endif
-  return quantity{hypot(x.numerical_value_in(unit), y.numerical_value_in(unit), z.numerical_value_in(unit)), ref};
+  const quantity result{hypot(x.numerical_value_in(unit), y.numerical_value_in(unit), z.numerical_value_in(unit)), ref};
+  MP_UNITS_POST_COMPAT(detail::value_is_non_negative(result.numerical_value_ref_in(result.unit)));
+  return result;
 }
 
 /**
- * @brief Linear interpolation or extrapolation
+ * Linear interpolation or extrapolation
  *
  * Computes the linear interpolation between `a` and `b`, if the parameter `t` is inside `[​0​, 1)`
  * (the linear extrapolation otherwise), i.e. the result of `a + t(b − a)` with accounting for
@@ -673,7 +706,7 @@ template<auto R1, auto Origin, typename Rep1, auto R2, typename Rep2, typename F
 }
 
 /**
- * @brief Computes the midpoint of two points
+ * Computes the midpoint of two points
  */
 template<auto R1, auto Origin, typename Rep1, auto R2, typename Rep2>
   requires requires(Rep1 a, Rep2 b) {

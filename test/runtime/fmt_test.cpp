@@ -759,6 +759,7 @@ TEST_CASE("fill and align pad to the display width, not to UTF-8 code units", "[
     CHECK(utility::detail::display_width(std::string_view{"m/s"}) == 3);
     CHECK(utility::detail::display_width(std::string_view{"m/s²"}) == 4);
     CHECK(utility::detail::display_width(std::string_view{"g₀"}) == 2);
+    CHECK(utility::detail::display_width(std::string_view{"°C"}) == 2);
     CHECK(utility::detail::display_width(std::string_view{"中"}) == 2);    // CJK ideograph: two columns
     CHECK(utility::detail::display_width(std::string_view{"\xff"}) == 1);  // malformed UTF-8: one column
     CHECK(utility::detail::display_width(std::wstring_view{L"m/s"}) == 3);
@@ -827,6 +828,60 @@ TEST_CASE("quantity subentities selection", "[quantity][fmt]")
     SECTION("opposite order") { CHECK(MP_UNITS_STD_FMT::format("{:%U %N}", 123 * isq::speed[km / h]) == "km/h 123"); }
   }
 }
+
+#if MP_UNITS_USE_FMTLIB
+// Needs `fmt::parse_context::set_end` (parse side) and a context rebound to a buffer (width path).
+template<typename Ctx>
+concept parse_context_with_set_end = requires(Ctx& ctx) { ctx.set_end(ctx.end()); };
+
+// A template, so that the compile-time checked format strings are not evaluated when the
+// installed {fmt} lacks `set_end`.
+template<typename Rep>
+void check_nested_replacement_fields()
+{
+  if constexpr (parse_context_with_set_end<fmt::format_parse_context>) {
+    const auto q = Rep{3.14159} * isq::length[m];
+
+    SECTION("auto indexing") { CHECK(MP_UNITS_STD_FMT::format("{::N[.{}f]}", q, 2) == "3.14 m"); }
+    SECTION("after another argument") { CHECK(MP_UNITS_STD_FMT::format("{} {::N[.{}f]}", 7, q, 2) == "7 3.14 m"); }
+    SECTION("manual indexing") { CHECK(MP_UNITS_STD_FMT::format("{1::N[.{0}f]}", 2, q) == "3.14 m"); }
+    SECTION("with quantity width") { CHECK(MP_UNITS_STD_FMT::format("{:>14:N[.{}f]}", q, 2) == "        3.14 m"); }
+    SECTION("with dynamic quantity width")
+    {
+      CHECK(MP_UNITS_STD_FMT::format("{:*^{}%N%?%U:N[.{}f]U[n]}", Rep{1.5} * isq::speed[m / s], 16, 1) ==
+            "***1.5 m s⁻¹****");
+    }
+  }
+}
+
+TEST_CASE("nested replacement fields in subentity format specs", "[quantity][fmt]")
+{
+  check_nested_replacement_fields<double>();
+}
+
+// The width path formats the components through a context rebound to a buffer, so a nested
+// replacement field still refers to the arguments of the enclosing format string. Manual indexing
+// and a runtime format string keep this independent of how the sub-spec is parsed.
+TEST_CASE("nested replacement fields together with a quantity width", "[quantity][fmt]")
+{
+  CHECK(fmt::format(fmt::runtime("{1:>14:N[.{0}f]}"), 2, 3.14159 * isq::length[m]) == "        3.14 m");
+}
+
+TEST_CASE("quantity formatting with FMT_COMPILE", "[quantity][fmt]")
+{
+  char buf[32] = {};
+  SECTION("literal text into a pointer")
+  {
+    const auto end = fmt::format_to(buf, FMT_COMPILE("{:%N = %U}"), 42 * isq::length[m]);
+    CHECK(std::string_view(buf, end) == "42 = m");
+  }
+  SECTION("width into a pointer")
+  {
+    const auto end = fmt::format_to(buf, FMT_COMPILE("{:*>8:N[.1f]}"), 4.2 * isq::length[m]);
+    CHECK(std::string_view(buf, end) == "***4.2 m");
+  }
+}
+#endif
 
 // TODO provide basic tests if format string when provided in a quantity formatter are passed to respective dimensions
 // and units formatters (detail formatting tests for dimensions and units are done separately)
@@ -1217,7 +1272,7 @@ TEST_CASE("default quantity_point formatting", "[quantity_point][ostream][fmt]")
       const quantity_point qp = point<si::degree_Celsius>(20.);
       os << qp;
 
-      SECTION("iostream") { CHECK(os.str() == "20 ℃"); }
+      SECTION("iostream") { CHECK(os.str() == "20 °C"); }
       SECTION("default format {}") { CHECK(MP_UNITS_STD_FMT::format("{}", qp) == os.str()); }
       SECTION("explicit {:%N%?%U}") { CHECK(MP_UNITS_STD_FMT::format("{:%N%?%U}", qp) == os.str()); }
     }
@@ -1240,7 +1295,7 @@ TEST_CASE("default quantity_point formatting", "[quantity_point][ostream][fmt]")
       const quantity_point qp = point<si::degree_Celsius>(20.);
       os << qp.in(usc::degree_Fahrenheit);
 
-      SECTION("iostream") { CHECK(os.str() == "68 ℉"); }
+      SECTION("iostream") { CHECK(os.str() == "68 °F"); }
       SECTION("default format {}") { CHECK(MP_UNITS_STD_FMT::format("{}", qp.in(usc::degree_Fahrenheit)) == os.str()); }
     }
 
@@ -1269,7 +1324,7 @@ TEST_CASE("default quantity_point formatting", "[quantity_point][ostream][fmt]")
 
     SECTION("compound difference combines into a single coherent sub-multiple")
     {
-      // `℃`, `K`, and `℉` all reduce to `kelvin`, so the two origin displacement units (`1/20 K` and
+      // `°C`, `K`, and `°F` all reduce to `kelvin`, so the two origin displacement units (`1/20 K` and
       // `1/9 K`) collapse to their single shared sub-multiple `1/180 K` rather than an ugly composite.
       const quantity sum = (point<si::degree_Celsius>(0) - point<si::kelvin>(0)) +
                            (point<usc::degree_Fahrenheit>(0) - point<si::degree_Celsius>(0));
@@ -1296,5 +1351,9 @@ TEST_CASE("default quantity_point formatting", "[quantity_point][ostream][fmt]")
     SECTION("width = 10") { CHECK(MP_UNITS_STD_FMT::format("{:10}", qp) == "      42 m"); }
     SECTION("width = 10, align = left") { CHECK(MP_UNITS_STD_FMT::format("{:<10}", qp) == "42 m      "); }
     SECTION("width = 10, fill = *") { CHECK(MP_UNITS_STD_FMT::format("{:*<10}", qp) == "42 m******"); }
+    SECTION("width = 10, align = center, two-code-point symbol")
+    {
+      CHECK(MP_UNITS_STD_FMT::format("{:*^10}", point<si::degree_Celsius>(20)) == "**20 °C***");
+    }
   }
 }

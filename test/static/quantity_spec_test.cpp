@@ -74,11 +74,11 @@ QUANTITY_SPEC_(frequency, inverse(period_duration), non_negative);
 QUANTITY_SPEC_(activity, inverse(time), non_negative);
 QUANTITY_SPEC_(area, pow<2>(length), non_negative);
 QUANTITY_SPEC_(volume, pow<3>(length), non_negative);
-QUANTITY_SPEC_(angular_measure, dimensionless, arc_length / radius, is_kind);
+QUANTITY_SPEC_(angular_measure, dimensionless, arc_length / radius, subkind);
 QUANTITY_SPEC_(special_angular_measure, angular_measure);
 QUANTITY_SPEC_(rotational_displacement, angular_measure, path_length / radius);
 QUANTITY_SPEC_(phase_angle, angular_measure);
-QUANTITY_SPEC_(solid_angular_measure, dimensionless, area / pow<2>(radius), is_kind, non_negative);
+QUANTITY_SPEC_(solid_angular_measure, dimensionless, area / pow<2>(radius), subkind, non_negative);
 QUANTITY_SPEC_(dimensionless_rate, dimensionless / time);
 QUANTITY_SPEC_(angular_measure_rate, angular_measure / time);
 QUANTITY_SPEC_(solid_angular_measure_rate, solid_angular_measure / time);
@@ -129,12 +129,14 @@ QUANTITY_SPEC_(apparent_power, complex_power, quantity_field::real);
 QUANTITY_SPEC_(capacitance, electric_charge / voltage);
 QUANTITY_SPEC_(impedance, voltage_phasor / electric_current_phasor);    // complex
 QUANTITY_SPEC_(resistance, impedance, voltage / electric_current);
-QUANTITY_SPEC_(storage_capacity, dimensionless, is_kind);
+QUANTITY_SPEC_(storage_capacity, dimensionless, subkind);
 QUANTITY_SPEC_(transfer_rate, storage_capacity / time);
 QUANTITY_SPEC_(pixel_count, dimensionless);
 QUANTITY_SPEC_(pixel_x, pixel_count);
 QUANTITY_SPEC_(pixel_y, pixel_count);
 QUANTITY_SPEC_(pixel_area, dimensionless, pixel_x * pixel_y);
+QUANTITY_SPEC_(pixel_pitch, length, length / pixel_count);
+QUANTITY_SPEC_(image_width, length, pixel_pitch * pixel_count);
 
 // V2 workaround: altitude and depth are signed coordinates (can be negative)
 QUANTITY_SPEC_(altitude, length);                    // signed vertical coordinate
@@ -985,6 +987,16 @@ static_assert(convertible(electromagnetism_power * time / period_duration, activ
 static_assert(convertible(active_power, electromagnetism_power* time / period_duration) == implicit);
 static_assert(convertible(pow<2>(active_power), pow<2>(electromagnetism_power* time / period_duration)) == implicit);
 
+// a factor whose equation names a sibling is expanded rather than paired with that sibling
+static_assert(convertible(image_width / pixel_count, pixel_pitch) == implicit);
+static_assert(convertible(image_width / pixel_count, pixel_pitch) ==
+              convertible(image_width, pixel_pitch* pixel_count));
+static_assert(convertible(pixel_pitch, image_width / pixel_count) == implicit);
+static_assert(convertible(image_width, pixel_pitch) == cast);
+// pairing stays one of the choices, and an equation that names only an ancestor is not expanded for it
+static_assert(convertible(pixel_pitch, height) == cast);
+static_assert(convertible(image_width / pixel_count, height) == cast);
+
 // a factor common to both sides doesn't change how they relate
 static_assert(convertible(north_speed * mass, east_speed* mass) == convertible(north_speed, east_speed));
 static_assert(convertible(frequency * mass, activity* mass) == convertible(frequency, activity));
@@ -1383,7 +1395,7 @@ static_assert(is_non_negative(frequency));
 static_assert(is_non_negative(activity));
 static_assert(is_non_negative(repetency));
 
-// solid_angular_measure: is_kind + non_negative coexist; kind_of<> is still NOT non_negative
+// solid_angular_measure: subkind + non_negative coexist; kind_of<> is still NOT non_negative
 static_assert(is_non_negative(solid_angular_measure));
 static_assert(!is_non_negative(kind_of<solid_angular_measure>));
 
@@ -1407,5 +1419,15 @@ static_assert(is_non_negative(newtonian_gravitational_potential_energy));
 // so weight (named child of force) is also NOT non_negative
 static_assert(!is_non_negative(force));
 static_assert(!is_non_negative(weight));
+
+
+// `is_kind` remains as the deprecated name of `subkind`
+MP_UNITS_DIAGNOSTIC_PUSH
+MP_UNITS_DIAGNOSTIC_IGNORE_DEPRECATED
+QUANTITY_SPEC_(legacy_storage_capacity, dimensionless, is_kind);
+static_assert(std::is_same_v<decltype(is_kind), decltype(subkind)>);
+MP_UNITS_DIAGNOSTIC_POP
+static_assert(get_kind(legacy_storage_capacity) == kind_of<legacy_storage_capacity>);
+static_assert(convertible(legacy_storage_capacity, dimensionless) == explicit_only);
 
 }  // namespace

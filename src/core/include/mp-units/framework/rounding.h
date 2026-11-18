@@ -40,7 +40,7 @@ namespace mp_units {
 MP_UNITS_EXPORT_BEGIN
 
 /**
- * @brief Rounding policies for potentially lossy value conversions
+ * Rounding policies for potentially lossy value conversions
  *
  * A conversion without a policy (e.g. `q.in(u)`) is only available when the framework
  * considers it value-preserving (following the `std::chrono` convention, a floating-point
@@ -97,7 +97,7 @@ inline constexpr rounded_down_t rounded_down{};
 inline constexpr rounded_up_t rounded_up{};
 
 /**
- * @brief A concept matching all rounding policies
+ * A concept matching all rounding policies
  *
  * Satisfied only by the types of `truncated`, `rounded`, `rounded_down`, and `rounded_up`.
  */
@@ -109,7 +109,7 @@ MP_UNITS_EXPORT_END
 namespace detail {
 
 // Internal representation of the rounding policies used to parameterize the conversion
-// engine (`sudo_cast`, `scale`) without instantiating it for every policy tag type.
+// engine (`sudo_cast`, `scale_by_magnitude`) without instantiating it for every policy tag type.
 enum class rounding_mode : std::int8_t { truncated, rounded, rounded_down, rounded_up };
 
 template<RoundingPolicy Policy>

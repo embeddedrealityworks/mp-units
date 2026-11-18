@@ -79,7 +79,7 @@ concept has_element_type_member = requires { typename T::element_type; };
 }  // namespace detail
 
 /**
- * @brief Describes the underlying arithmetic/element type of a representation type.
+ * Describes the underlying arithmetic/element type of a representation type.
  *
  * The library uses this trait to discover the "scalar element" inside a representation
  * type (e.g. `int` for `safe_int<int>`, `double` for `cartesian_vector<double>`). It is
@@ -137,7 +137,7 @@ MP_UNITS_EXPORT template<typename T>
 using representation_underlying_type_t = typename representation_underlying_type<T>::type;
 
 /**
- * @brief Maps a representation value type to the concrete type a quantity should store.
+ * Maps a representation value type to the concrete type a quantity should store.
  *
  * Expression-template linear algebra libraries (e.g. Eigen, Blaze, Armadillo) return lazy proxy
  * types from their arithmetic operators. Such a proxy keeps references to its operands and must
@@ -146,24 +146,32 @@ using representation_underlying_type_t = typename representation_underlying_type
  *
  * The `quantity` deduction guides and the concepts that compute the representation type resulting
  * from an arithmetic operation use this trait so that the stored representation is always a
- * materialized concrete type. The primary template simply decays the type, which is correct for
- * scalars and for vector/matrix types whose operators return a concrete value (e.g. `cartesian_vector`,
- * GLM). Specialize it for an expression-template type to name its evaluated type (for example to
- * `Eigen::Matrix`'s `PlainObject`, or Blaze's `ResultType`) — see the integration guide.
+ * materialized concrete type. A `const` or a reference is forwarded to the unqualified type, which
+ * the primary template maps to itself. That is correct for scalars and for vector/matrix types whose
+ * operators return a concrete value (e.g. `cartesian_vector`, GLM). Specialize it for an expression-template type to
+ * name its evaluated type (for example to `Eigen::Matrix`'s `PlainObject`, or Blaze's `ResultType`) — see the
+ * integration guide.
  *
  * @tparam T the representation value type (possibly an expression-template proxy)
  */
 MP_UNITS_EXPORT template<typename T>
 struct representation_canonical_type {
-  using type = std::remove_cvref_t<T>;
+  using type = T;
 };
 
-// A top-level `const` is forwarded to the unqualified type (mirroring `representation_underlying_type`
-// above) so that library specializations only need to handle the unqualified type. This matters
-// because expression-template libraries return their proxies by `const` value (e.g.
-// `decltype(Eigen::Vector3d{} * 2.0)` is a `const Eigen::CwiseBinaryOp<...>`).
+// A top-level `const` (mirroring `representation_underlying_type` above) and a reference are forwarded
+// to the unqualified type, so that a specialization only needs to handle the unqualified type.
+// Expression-template libraries return their proxies by `const` value (e.g.
+// `decltype(Eigen::Vector3d{} * 2.0)` is a `const Eigen::CwiseBinaryOp<...>`), and a result type of an
+// operator that is a reference to a proxy must not bypass the specialization either.
 template<typename T>
 struct representation_canonical_type<const T> : representation_canonical_type<T> {};
+
+template<typename T>
+struct representation_canonical_type<T&> : representation_canonical_type<T> {};
+
+template<typename T>
+struct representation_canonical_type<T&&> : representation_canonical_type<T> {};
 
 MP_UNITS_EXPORT template<typename T>
 using representation_canonical_type_t = typename representation_canonical_type<T>::type;
@@ -191,87 +199,29 @@ using value_type_t = value_type_impl<T>::type;
 /////////////// real / imag / modulus CUSTOMIZATION POINTS ///////////////
 
 // `real`, `imag`, and `modulus` are general numeric customization points: a representation type
-// exposes them either as members or as ADL free functions. They underlie the `numeric_field` field
-// detection below and the framework's complex-scalar handling.
+// exposes them either as members or as ADL free functions. The CPO objects are defined in
+// `representation_concepts.h`, because their return types are constrained with `Real` and
+// `RealScalar`, which are built on the `numeric_field` detection below. That detection therefore
+// reads the raw `real()`/`imag()` surface declared here rather than the CPOs, so it doesn't depend
+// on them.
 
 namespace detail::real_impl {
 
 void real() = delete;  // poison pill
 
-struct real_t {
-  // TODO how to constrain the return with RealScalar?
-  [[nodiscard]] constexpr auto operator()(const auto& clx) const
-    requires requires { clx.real(); } || requires { real(clx); }
-  {
-    if constexpr (requires { clx.real(); })
-      return clx.real();
-    else if constexpr (requires { real(clx); })
-      return real(clx);
-  }
-};
+template<typename T>
+concept has_real = requires(const T& value) { value.real(); } || requires(const T& value) { real(value); };
 
 }  // namespace detail::real_impl
-
-inline namespace cpo {
-
-MP_UNITS_EXPORT inline constexpr ::mp_units::detail::real_impl::real_t real;
-
-}
 
 namespace detail::imag_impl {
 
 void imag() = delete;  // poison pill
 
-struct imag_t {
-  // TODO how to constrain the return with RealScalar?
-  [[nodiscard]] constexpr auto operator()(const auto& clx) const
-    requires requires { clx.imag(); } || requires { imag(clx); }
-  {
-    if constexpr (requires { clx.imag(); })
-      return clx.imag();
-    else if constexpr (requires { imag(clx); })
-      return imag(clx);
-  }
-};
+template<typename T>
+concept has_imag = requires(const T& value) { value.imag(); } || requires(const T& value) { imag(value); };
 
 }  // namespace detail::imag_impl
-
-inline namespace cpo {
-
-MP_UNITS_EXPORT inline constexpr ::mp_units::detail::imag_impl::imag_t imag;
-
-}
-
-namespace detail::modulus_impl {
-
-void modulus() = delete;  // poison pill
-void abs() = delete;      // poison pill
-
-struct modulus_t {
-  // TODO how to constrain the return with RealScalar?
-  [[nodiscard]] constexpr auto operator()(const auto& clx) const
-    requires requires { clx.modulus(); } || requires { modulus(clx); } || requires { clx.abs(); } ||
-             requires { abs(clx); }
-  {
-    if constexpr (requires { clx.modulus(); })
-      return clx.modulus();
-    else if constexpr (requires { modulus(clx); })
-      return modulus(clx);
-    // `std` made a precedence of using `abs` for modulus on `std::complex`
-    else if constexpr (requires { clx.abs(); })
-      return clx.abs();
-    else if constexpr (requires { abs(clx); })
-      return abs(clx);
-  }
-};
-
-}  // namespace detail::modulus_impl
-
-inline namespace cpo {
-
-MP_UNITS_EXPORT inline constexpr ::mp_units::detail::modulus_impl::modulus_t modulus;
-
-}
 
 
 /////////////// tensor_order ///////////////
@@ -342,13 +292,12 @@ concept field_reachable = utility::specified<decltype(tensor_order<T>)> &&
                           (tensor_order<T> == 0 || (tensor_order<T> == 1 && has_vector_indexing<T>) ||
                            (tensor_order<T> == 2 && has_matrix_indexing<T>));
 
-// The complex read API (`real()`/`imag()`) on a type's *own* surface, discovered through the
-// `real`/`imag` CPOs (members or ADL free functions).
+// The complex read API (`real()`/`imag()`) on a type's *own* surface (members or ADL free
+// functions). A type that exposes the API is classified complex whatever the API returns. If its
+// `real()` returns something that isn't real, the type then fails `ComplexScalar` instead of being
+// accepted as a real scalar.
 template<typename T>
-concept has_complex_api = requires(const T& v) {
-  ::mp_units::real(v);
-  ::mp_units::imag(v);
-};
+concept has_complex_api = real_impl::has_real<T> && imag_impl::has_imag<T>;
 
 template<typename T>
   requires field_reachable<T>
@@ -467,7 +416,7 @@ inline constexpr bool disable_representation<T> = true;
 MP_UNITS_EXPORT_BEGIN
 
 /**
- * @brief Specifies if a value of a type should be treated as a floating-point value
+ * Specifies if a value of a type should be treated as a floating-point value
  *
  * This type trait should be specialized for a custom representation type to specify
  * that values of this type should be treated by the library as a floating-point ones
@@ -484,7 +433,7 @@ constexpr bool treat_as_floating_point =
 #endif
 
 /**
- * @brief Specifies if a specific conversion between two types is representable without data loss
+ * Specifies if a specific conversion between two types is representable without data loss
  *
  * @deprecated Use `mp_units::implicitly_scalable` instead.
  *
@@ -512,7 +461,7 @@ template<typename Rep>
 constexpr bool is_tensor = false;
 
 /**
- * @brief A type trait that defines zero, one, min, and max for a representation type
+ * A type trait that defines zero, one, min, and max for a representation type
  *
  * The zero, one, min, and max member functions in mp_units::quantity forward their work to
  * these methods. This type can be specialized if the representation Rep requires a specific
@@ -559,7 +508,7 @@ template<typename Rep>
 using quantity_values [[deprecated("2.5.0: Use `representation_values` instead")]] = representation_values<Rep>;
 
 /**
- * @brief Customization point for handling domain constraint violations.
+ * Customization point for handling domain constraint violations.
  *
  * The library calls `constraint_violation_handler<Rep>::on_violation(msg)` when
  * a domain constraint is violated (e.g., out-of-bounds value, non-negativity).
@@ -586,7 +535,7 @@ concept HasConstraintViolationHandler =
 MP_UNITS_EXPORT_BEGIN
 
 /**
- * @brief Provides support for external quantity-like types
+ * Provides support for external quantity-like types
  *
  * The type trait should provide the @c reference object, a type alias @c rep,
  * and static member functions @c to_numerical_value(T) that returns the raw value
@@ -604,7 +553,7 @@ template<typename T>
 struct quantity_like_traits;
 
 /**
- * @brief Provides support for external quantity point-like types
+ * Provides support for external quantity point-like types
  *
  * The type trait should provide nested @c reference and @c origin objects,
  * a type alias @c rep, and static member functions @c to_numerical_value(T) that
@@ -623,7 +572,7 @@ template<typename T>
 struct quantity_point_like_traits;
 
 /**
- * @brief Opts a vector quantity into decomposition into named component vectors
+ * Opts a vector quantity into decomposition into named component vectors
  *
  * Specialize for a vector @c quantity_spec and inherit from @c vector_axes, listing the per-axis
  * quantity specs in coordinate order (see @c mp-units/framework/vector_components.h):
@@ -651,7 +600,7 @@ template<QuantitySpec auto QS>
 struct component_vectors;
 
 /**
- * @brief The former name of @c component_vectors
+ * The former name of @c component_vectors
  *
  * A specialization of it still declares the axes, and @c component_vectors takes precedence when
  * both are specialized.

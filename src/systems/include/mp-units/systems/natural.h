@@ -31,6 +31,22 @@
 #endif
 // IWYU pragma: end_exports
 
+/**
+ * A system of natural units, where the speed of light and the reduced Planck constant are 1
+ *
+ * _Energy_ is the only base dimension, so _mass_, _length_, and _time_ are all measured in powers
+ * of the electronvolt.
+ *
+ * @code{.cpp}
+ * using natural::unit_symbols::GeV;
+ *
+ * quantity proton_mass = natural::mass(0.938 * GeV);
+ * quantity duration = natural::duration(1. / GeV);  // time is an inverse energy
+ * @endcode
+ *
+ * @see [Natural Units](docs:users_guide/systems/natural_units) in the User's Guide
+ * @see [Natural System](docs:reference/systems_reference/systems/natural) for every entity it defines
+ */
 MP_UNITS_EXPORT
 namespace mp_units::natural {
 
@@ -56,13 +72,13 @@ QUANTITY_SPEC(length, inverse_energy);
 QUANTITY_SPEC(energy_squared, pow<2>(energy));
 
 
-// Dimensionless quantities. Only angular_measure is a kind (is_kind prevents implicit cross-conversion)
+// Dimensionless quantities. Only angular_measure is a kind (subkind prevents implicit cross-conversion)
 // speed: β = v/c, a plain ratio (not a kind) and the root of the velocity hierarchy
 // velocity: directional speed
 // angular_measure: θ = arc/radius; separate kind — angles are not speeds
 QUANTITY_SPEC(speed,           dimensionless,  length / duration);            // v = l/t, a plain ratio (beta)
 QUANTITY_SPEC(velocity,        speed);
-QUANTITY_SPEC(angular_measure, dimensionless, is_kind);
+QUANTITY_SPEC(angular_measure, dimensionless, subkind);
 
 // Derived quantities with explicit quantity equations
 QUANTITY_SPEC(momentum,     energy,         mass * velocity);      // p = mv

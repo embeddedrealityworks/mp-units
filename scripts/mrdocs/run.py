@@ -311,6 +311,37 @@ NO_CLANG_FORMAT = (
 )
 
 
+# How long a lock may go without naming its owner before it is treated as
+# abandoned. The holder writes the pid immediately after `mkdir`, so a gap this
+# long is a process that died in between rather than one still starting up.
+_UNCLAIMED_LOCK = 10.0
+
+
+def _lock_owner(owner: Path) -> int | None:
+    """The pid holding the lock, or `None` if the holder is gone."""
+    try:
+        pid = int(owner.read_text().strip())
+    except (OSError, ValueError):
+        # Nothing has claimed it. For a moment that is the window between `mkdir` and
+        # the write, and mistaking it for a corpse would break the exclusion.
+        try:
+            age = time.time() - owner.parent.stat().st_mtime
+        except OSError:
+            return None
+        return None if age > _UNCLAIMED_LOCK else 0
+    if os.name == "nt":
+        # There `os.kill(pid, 0)` sends a Ctrl-C (`CTRL_C_EVENT` is 0) rather than
+        # probing, so a holder is taken to be alive and the timeout applies.
+        return pid
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        return pid  # someone else's process, so it is alive
+    return pid
+
+
 @contextlib.contextmanager
 def _exclusive(timeout: float = 900.0):
     """Serialise generation across processes.
@@ -324,25 +355,49 @@ def _exclusive(timeout: float = 900.0):
     neither serves it nor treats creating it as a change to rebuild for.
     """
     lock = _cache_root() / "generate.lock"
+    owner = lock / "pid"
     lock.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout
+    announced = False
     while True:
         try:
             lock.mkdir()
             break
         except FileExistsError:
-            if time.monotonic() >= deadline:
-                # Better to generate and risk the clash than to hang a build
-                # forever behind a lock whose owner died.
+            holder = _lock_owner(owner)
+            if holder is None:
+                # The owner died without unwinding: it was killed, or its terminal
+                # closed. Waiting out the full timeout for a lock nobody holds
+                # looks like a hang.
+                print(f"warning: clearing a stale lock at {lock}", file=sys.stderr)
+                # Separately, because an owner that died before writing its pid
+                # left no file to unlink, and the directory still has to go.
+                with contextlib.suppress(OSError):
+                    owner.unlink()
+                with contextlib.suppress(OSError):
+                    lock.rmdir()
+                continue
+            if not announced:
+                # Without this the script prints nothing at all while it waits,
+                # which is indistinguishable from having hung.
                 print(
-                    f"warning: ignoring a stale lock at {lock}",
+                    "waiting for another generation to finish"
+                    + (f" (pid {holder})" if holder else ""),
                     file=sys.stderr,
                 )
+                announced = True
+            if time.monotonic() >= deadline:
+                # Better to generate and risk the clash than to wait forever.
+                print(f"warning: ignoring the lock at {lock}", file=sys.stderr)
                 break
             time.sleep(0.5)
+    with contextlib.suppress(OSError):
+        owner.write_text(str(os.getpid()))
     try:
         yield
     finally:
+        with contextlib.suppress(OSError):
+            owner.unlink()
         with contextlib.suppress(OSError):
             lock.rmdir()
 
@@ -380,6 +435,57 @@ def _generate_if_needed(force: bool, extra: list[str] | None) -> int:
     return result
 
 
+def _sync(staging: Path, destination: Path) -> tuple[int, int, int]:
+    """Copy across only what changed, leaving unchanged pages untouched.
+
+    ProperDocs rebuilds a page when its file changes, and MrDocs has no incremental
+    mode, so regenerating in place made every one of the thousands of pages look
+    new on every run and the whole site was rebuilt for a one-header edit. The
+    generated output is mostly identical between runs, so comparing content and
+    writing only the difference keeps the rest of the pipeline cheap.
+    """
+    written = removed = kept = 0
+    destination.mkdir(parents=True, exist_ok=True)
+    fresh = {path.relative_to(staging) for path in staging.rglob("*") if path.is_file()}
+    stale = {
+        path.relative_to(destination)
+        for path in destination.rglob("*")
+        if path.is_file()
+    }
+
+    # Written before anything is removed. A `properdocs serve` may be reading this
+    # tree, and it collects the file list up front: a page that disappears
+    # between the listing and the read crashes the build. Adding first and
+    # deleting after leaves a reader seeing both the old and the new name for a
+    # moment instead of neither.
+    for relative in sorted(fresh):
+        source, target = staging / relative, destination / relative
+        if target.is_file() and target.read_bytes() == source.read_bytes():
+            kept += 1
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        written += 1
+
+    for relative in sorted(stale - fresh):
+        # written by the caller once generation has succeeded, so it is never in staging
+        if destination / relative == CACHE:
+            continue
+        (destination / relative).unlink()
+        removed += 1
+
+    # deepest first, so a directory emptied by its children's removal also goes
+    for directory in sorted(
+        (path for path in destination.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        if not any(directory.iterdir()):
+            directory.rmdir()
+
+    return written, removed, kept
+
+
 def _generate(extra: list[str]) -> int:
     if _git("status", "--porcelain", "--", "src"):
         print(
@@ -390,32 +496,43 @@ def _generate(extra: list[str]) -> int:
 
     binary = mrdocs_binary()
 
-    if OUTPUT.exists():
-        shutil.rmtree(OUTPUT)
+    # An explicit --output means the caller wants the pages somewhere of their
+    # own; generate straight there and leave the reference alone.
+    redirected = any(argument.startswith("--output") for argument in extra)
 
-    result = subprocess.run(
-        [
-            str(binary),
-            "--config=./mrdocs.yml",
-            f"--base-url={SOURCE_URL}/{source_ref()}/src/",
-            *extra,
-        ],
-        cwd=HERE,
-    )
-    if result.returncode:
-        return result.returncode
-
-    print(f"nested {nest_namespace_pages(OUTPUT)} namespace pages")
-
-    formatter = clang_format_binary()
-    if formatter is None:
-        print(NO_CLANG_FORMAT, file=sys.stderr)
-    else:
-        done, kept = format_synopses(OUTPUT, formatter)
-        print(
-            f"formatted {done} synopses"
-            + (f", kept {kept} as generated" if kept else "")
+    with tempfile.TemporaryDirectory(prefix="mrdocs-") as staging_dir:
+        staging = OUTPUT if redirected else Path(staging_dir) / "out"
+        result = subprocess.run(
+            [
+                str(binary),
+                "--config=./mrdocs.yml",
+                f"--base-url={SOURCE_URL}/{source_ref()}/src/",
+                *([] if redirected else [f"--output={staging}"]),
+                *extra,
+            ],
+            cwd=HERE,
         )
+        if result.returncode:
+            return result.returncode
+
+        print(f"nested {nest_namespace_pages(staging)} namespace pages")
+
+        formatter = clang_format_binary()
+        if formatter is None:
+            print(NO_CLANG_FORMAT, file=sys.stderr)
+        else:
+            done, kept = format_synopses(staging, formatter)
+            print(
+                f"formatted {done} synopses"
+                + (f", kept {kept} as generated" if kept else "")
+            )
+
+        if not redirected:
+            written, removed, unchanged = _sync(staging, OUTPUT)
+            print(
+                f"synced {written} new or changed pages, removed {removed}, "
+                f"left {unchanged} untouched"
+            )
     return 0
 
 

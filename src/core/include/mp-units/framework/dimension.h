@@ -121,7 +121,7 @@ struct dimension_interface {
 }  // namespace detail
 
 /**
- * @brief A dimension of a base quantity
+ * A dimension of a base quantity
  *
  * Base quantity is a quantity in a conventionally chosen subset of a given system of quantities, where no quantity
  * in the subset can be expressed in terms of the other quantities within that subset. They are referred to as
@@ -154,7 +154,7 @@ struct base_dimension : detail::dimension_interface {
 };
 
 /**
- * @brief A dimension of a derived quantity
+ * A dimension of a derived quantity
  *
  * Derived dimension is an expression of the dependence of a quantity on the base quantities of a system of quantities
  * as a product of powers of factors corresponding to the base quantities, omitting any numerical factors.
@@ -199,7 +199,7 @@ template<detail::SymbolicTerm... Expr>
 struct derived_dimension final : detail::dimension_interface, detail::derived_dimension_impl<Expr...> {};
 
 /**
- * @brief Dimension one
+ * Dimension one
  *
  * Dimension for which all the exponents of the factors corresponding to the base
  * dimensions are zero. It is a dimension of a quantity of dimension one also known as
@@ -271,9 +271,10 @@ template<typename CharT, std::output_iterator<CharT> Out, typename... Nums, type
 template<typename CharT, std::output_iterator<CharT> Out, typename... Expr>
 [[nodiscard]] constexpr Out dimension_symbol_impl(Out out, const derived_dimension_impl<Expr...>&,
                                                   const dimension_symbol_formatting& fmt, bool negative_power)
+  MP_UNITS_PRE(negative_power == false)
 {
   (void)negative_power;
-  MP_UNITS_PRECONDITION(negative_power == false);
+  MP_UNITS_EXPECTS(negative_power == false);
   return dimension_symbol_impl<CharT>(out, typename derived_dimension_impl<Expr...>::_num_{},
                                       typename derived_dimension_impl<Expr...>::_den_{}, fmt);
 }

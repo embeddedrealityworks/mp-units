@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 #include "test_tools.h"
+#include <mp-units/overflow_policies.h>
 #include <mp-units/systems/codata.h>
 #include <mp-units/systems/hep.h>
 #include <mp-units/systems/iau.h>
@@ -29,6 +30,7 @@
 #ifdef MP_UNITS_IMPORT_STD
 import std;
 #else
+#include <compare>
 #include <complex>
 #include <concepts>
 #include <string>
@@ -54,6 +56,53 @@ static_assert(!std::constructible_from<uncertain<double>, double, double, double
 
 // the framework requires every real scalar representation to be totally ordered
 static_assert(std::totally_ordered<uncertain<double>>);
+
+// equality and the order compare the central values only, so a value with an uncertainty compares
+// with an exact one, such as a bound of a range, by its central value
+static_assert(uncertain{10., 0.1} == uncertain{10., 0.5});
+static_assert(uncertain{10., 0.5} == 10.);
+static_assert(!(uncertain{10., 0.5} < uncertain{10., 0.1}));
+static_assert(!(uncertain{10., 0.1} < uncertain{10., 0.5}));
+static_assert(uncertain{9.9, 5.} < uncertain{10., 0.});
+static_assert(uncertain{10., 0.5} <= 10. && uncertain{10., 0.5} >= 10.);
+static_assert(uncertain{10., 0.5}.uncertainty() != uncertain{10., 0.1}.uncertainty());
+
+// values with the same central value are equivalent but not interchangeable, so the order is weak
+static_assert(std::same_as<decltype(uncertain<int>{} <=> uncertain<int>{}), std::weak_ordering>);
+static_assert(std::same_as<decltype(uncertain<double>{} <=> uncertain<double>{}), std::partial_ordering>);
+
+// the expanded uncertainty uses the coverage factor `k = 2` unless told otherwise
+static_assert(uncertain{10., 0.5}.expanded_uncertainty() == 1.);
+static_assert(uncertain{10., 0.5}.expanded_uncertainty(3.) == 1.5);
+static_assert(uncertain{10, 3}.expanded_uncertainty() == 6);
+
+// a specification check: the whole interval inside the limits, or any part of it
+static_assert(certainly_within(uncertain{10., 0.5}, 9., 11.));
+static_assert(!certainly_within(uncertain{10., 0.5}, 9., 10.5));
+static_assert(certainly_within(uncertain{10., 0.5}, 9., 10.5, 1.));
+static_assert(certainly_within(uncertain{10., 0.}, 10., 10.));
+static_assert(possibly_within(uncertain{10., 0.5}, 10.5, 12.));
+static_assert(possibly_within(uncertain{10., 0.5}, 11., 12.));
+static_assert(!possibly_within(uncertain{10., 0.5}, 11., 12., 1.));
+static_assert(!possibly_within(uncertain{10., 0.5}, 7., 8.9));
+static_assert(certainly_within(uncertain{10, 1}, 8, 12));
+static_assert(!certainly_within(uncertain{10, 1}, 8, 11));
+
+// the quantity forms need a measured operand, and quantities that can be subtracted or compared
+template<typename Lhs, typename Rhs>
+concept can_check_compatibility = requires(const Lhs& lhs, const Rhs& rhs) { metrologically_compatible(lhs, rhs); };
+static_assert(can_check_compatibility<quantity<si::metre, uncertain<double>>, quantity<si::centi<si::metre>, double>>);
+static_assert(can_check_compatibility<quantity<si::metre, double>, quantity<si::metre, uncertain<double>>>);
+static_assert(!can_check_compatibility<quantity<si::metre, double>, quantity<si::metre, double>>);
+static_assert(
+  !can_check_compatibility<quantity<si::metre, uncertain<double>>, quantity<si::second, uncertain<double>>>);
+static_assert(!can_check_compatibility<quantity<si::metre, uncertain<double>>, quantity<si::metre, uncertain<float>>>);
+
+template<typename Val, typename Limit>
+concept can_check_limits = requires(const Val& val, const Limit& limit) { certainly_within(val, limit, limit); };
+static_assert(can_check_limits<quantity<si::metre, uncertain<double>>, quantity<si::centi<si::metre>, double>>);
+static_assert(!can_check_limits<quantity<si::metre, double>, quantity<si::metre, double>>);
+static_assert(!can_check_limits<quantity<si::metre, uncertain<double>>, quantity<si::second, double>>);
 
 // the element type is constrained, so an unsupported one is rejected at instantiation rather
 // than deep inside a propagation formula
@@ -307,5 +356,23 @@ static_assert(!valid_measured_constant<mag<2> * si::metre, mag_ratio<1, 1000> * 
 static_assert(!valid_measured_constant<mag<2> * si::metre, -mag_ratio<1, 1000> * si::metre>);
 
 }  // namespace uncertainty_wrappers
+
+// A bounded origin decides on the central value at either end of its range: a value on the upper
+// bound with an uncertainty is accepted, as one on the lower bound is.
+namespace bounded_measurements {
+
+using namespace mp_units::si::unit_symbols;
+
+inline constexpr struct scale_zero final : absolute_point_origin<isq::mass, check_in_range{0. * kg, 1000. * kg}> {
+} scale_zero;
+
+using reading = quantity_point<isq::mass[kg], scale_zero, uncertain<double>>;
+
+static_assert(reading::is_within_bounds(uncertain{0., 0.5} * kg, scale_zero));
+static_assert(reading::is_within_bounds(uncertain{1000., 0.5} * kg, scale_zero));
+static_assert(!reading::is_within_bounds(uncertain{-0.2, 0.5} * kg, scale_zero));
+static_assert(!reading::is_within_bounds(uncertain{1000.1, 0.5} * kg, scale_zero));
+
+}  // namespace bounded_measurements
 
 }  // namespace

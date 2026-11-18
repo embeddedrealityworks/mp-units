@@ -8,6 +8,62 @@ This page documents the version history and changes for the **mp-units** library
 
 ### 2.6.0 <small>TBD</small> { id="2.6.0" }
 
+- fix: `wrap_to_range` and `reflect_in_range` no longer overflow a standard integer
+      representation when the length of the range, or the period of the reflection (twice
+      that length), exceeds the representation's maximum
+- fix: the UAV example adds the geoid undulation to the MSL altitude (h = H + N) and
+      stores it as a signed `isq::altitude`, and the `north_ccw` origin of the `geographic`
+      example lies at +90° from `east`
+- (!) fix: a quantity point whose origin has bounds, its own or inherited, is
+      default-constructed at its origin. Default-initialization and value-initialization
+      both store a zero delta, so such a point is no longer trivially default-constructible.
+      Its default constructor is offered only where the origin lies within the range of the
+      policy, judged by the policy's `min` and `max`. Value-initialization used to store a
+      value outside the range without applying the policy, such as 0 m at an origin with
+      `check_in_range{10 * m, 20 * m}`. Default-initialization used to leave the delta
+      indeterminate
+- (!) refactor: an argument of `absolute_point_origin` or `relative_point_origin` after the
+      quantity specification or the origin point must be a bounds policy. Any other argument
+      used to be accepted and ignored
+- (!) fix: at an origin with bounds, its own or inherited, `std::numeric_limits` of a
+      quantity point provides `lowest()` from the lower bound where there is one, and each
+      of `epsilon()`, `round_error()`, `infinity()`, `quiet_NaN()`, `signaling_NaN()`, and
+      `denorm_min()` only where its value lies within the range that the policy's `min` and
+      `max` declare. So `infinity()` is provided on `[0, ∞)` and a NaN never is.
+      `has_infinity`, `has_quiet_NaN`, and `has_signaling_NaN` follow the members, and
+      `is_iec559` is `false` there. These members constructed a value of the
+      representation as a point, which the policy checked or changed: `quiet_NaN()`
+      violated the precondition at a `check_in_range` origin, and `clamp_to_range` turned
+      `infinity()` into its upper bound. For a point that inherits its bounds, `lowest()`
+      used to be the lowest value of the representation
+- feat: `is_within_bounds` and `try_make` of a quantity point also take a point of another
+      type or a point-like value, and test the value that the converting constructor
+      stores. For a point from another absolute origin, they are offered only when no
+      checking policy applies to the point that the frame projection returns, nor to the
+      point it is given unless the source is measured from its absolute origin
+- feat: `try_make` tests the value once, and stores a value that passes without the
+      constructor testing it again. For a point from another absolute origin, it calls
+      the frame projection once
+- fix: a conversion from a point of another absolute origin no longer constructs a point at
+      the target's relative origin before the constructor tests the value. That point could
+      have a representation other than the target's, so the violation handler of a
+      `constrained` target representation was bypassed and a precondition violated instead
+- fix: `point_for()` keeps a wrapper representation such as `constrained` when the offset
+      of the origin is of its underlying type, so a violation is reported through the
+      representation's handler. The result used to be a point of the underlying type
+- (!) fix: `uncertain<T>` compares central values only, in both `==` and `<=>`, and
+      the uncertainty no longer takes part. A value whose central value equals the upper
+      bound of a `check_in_range` origin, such as `1000 ± 0.5 kg` against
+      `[0 kg, 1000 kg]`, was rejected while one on the lower bound was accepted. Values
+      with equal central values are now equivalent, for example as `std::set` keys, and
+      the order is at most a weak one
+- feat: `uncertain<T>` checks agreement and limits with a coverage factor `k`, 2 by
+      default. `metrologically_compatible(x, y, k)` tells whether two values agree within
+      their combined uncertainty, and `certainly_within(x, lower, upper, k)` and
+      `possibly_within(...)` whether the interval `value ± k·uncertainty` lies within, or
+      overlaps, the limits. Each takes `uncertain<T>` values, or quantities and quantity
+      points with that representation, compared in their common unit.
+      `expanded_uncertainty(k)` returns `k·uncertainty()`
 - feat: `mp-units/systems/iupac.h` provides the non-SI units of the IUPAC Green Book that
       no other system defines: `iupac::torr` (`Torr`, exactly 1/760 of the standard
       atmosphere), `iupac::millimetre_of_mercury` (`mmHg`, the conventional 13 595.1 kg/m³
@@ -20,6 +76,30 @@ This page documents the version history and changes for the **mp-units** library
 - (!) fix: `usc::inch_of_mercury` is exactly 25.4 conventional mmHg, 3386.388 640 341 Pa.
       It was the rounded 3386.389 Pa, so converted values change in the seventh
       significant digit (#867)
+- refactor: `quantity_tensor_order`, `quantity_field`, `character_set`,
+      `unit_symbol_solidus`, `unit_symbol_separator`, and `si::prefix_range` don't name an
+      underlying type, as P3045 specifies them. The standard makes `std::int8_t` and
+      `std::uint8_t` optional, so a standard enumeration can't be built on them. Each now
+      has the size of an `int`
+- perf: `+`, `-`, `%`, and the comparisons read an operand that already has the common
+      representation type and an equivalent unit by reference rather than copying it. A
+      copy isn't free for a vector or a matrix representation (#837)
+- fix: `representation_canonical_type` forwards a reference to the unqualified type, as it
+      already did a `const`, so a specialization for an expression-template proxy applies
+      also when an operator returns a reference to the proxy (#837)
+- (!) refactor: the text symbols of `si::degree_Celsius` and `usc::degree_Fahrenheit` change
+      from `℃` and `℉` to `°C` and `°F`, following the Unicode Standard's recommendation
+      (chapter 22, Letterlike Symbols) to write them with U+00B0 DEGREE SIGN rather than with
+      the compatibility characters U+2103 and U+2109. The portable symbols are unchanged
+- feat: `isq::specific_energy_imparted` (ISO 80000-10 item 10-81.2) and `isq::kerma`
+      (item 10-86.1) are children of `isq::absorbed_dose`, so both take the gray. The SI
+      Brochure gives the gray for absorbed dose and kerma, and a CIPM note for specific
+      energy imparted. Like an absorbed dose, neither adds to an `isq::dose_equivalent`
+- (!) refactor: `is_kind` is renamed to `subkind`. It is a tag that makes a quantity a kind
+      of its own, not a predicate, and an `is_` prefix reads as one. The former name is
+      deprecated
+- refactor: `scale<To>(M, value)` is renamed to `scale_by_magnitude<To>(M, value)`, which
+      says what the value is scaled by. The former name is deprecated
 - fix: the displacement between two point origins keeps a named unit that already is the
       coarsest exact one, so a `-27 cm` origin offset and the point differences across it
       print in `cm` rather than in `(1/100 m)`
@@ -32,7 +112,8 @@ This page documents the version history and changes for the **mp-units** library
 - (!) refactor: `char`, `wchar_t`, `char8_t`, `char16_t`, and `char32_t` are not
       representation types, as `bool` isn't. A character type holds a character, not a
       number, so `quantity<si::metre, char>` is ill-formed. `signed char` and `unsigned char`,
-      the types of `std::int8_t` and `std::uint8_t`, stay representation types
+      the types of `std::int8_t` and `std::uint8_t`, stay representation types. A literal
+      zero of a character type, such as `'\0'`, doesn't compare against a quantity either
 - feat: a vector quantity composes from a single value holding its components, the
       inverse of its tuple protocol: `quantity<flight_velocity[km / h], vec3> v =
       std::tuple{fwd, lat, vert};`. Any type a structured binding decomposes through
@@ -110,6 +191,16 @@ This page documents the version history and changes for the **mp-units** library
       from a kind none at all. A `kind_of<isq::angular_velocity>` converts to a child
       defined as `inverse(isq::duration)` only explicitly, and two siblings that each
       carry a declared kind the other lacks don't convert, as their squares already didn't
+- fix: a quantity defined as a sibling times other factors, divided by those factors,
+      converts to the sibling. With `price` defined as
+      `currency / count`, and `notional`, another child of `currency`, defined as
+      `price * count`, `notional / count` converts to `price` implicitly, as `notional`
+      converts to `price * count`. The two used to pair as siblings and needed
+      `quantity_cast`
+- fix: `pow` of a single named dimension, quantity specification, or unit reduces the
+      exponent, so `pow<4, 2>(si::metre)` is `pow<2>(si::metre)` and `pow<4, 2>` of a
+      length quantity compares with an area. It used to give `power<metre, 4, 2>`, a
+      different type from `power<metre, 2>`
 - (!) fix: ISQ definitions corrected against ISO/IEC 80000. `isq::angular_repetency` is
       `phase_angle / wavelength` (k = 2π/λ, like `angular_frequency`), so a phase speed
       ω/k converts to `length / time` implicitly and `1 / wavelength` is an angular
@@ -567,6 +658,11 @@ This page documents the version history and changes for the **mp-units** library
         `MP_UNITS_BUILD_INTEGRATION_{EIGEN,GLM,BLAZE}` CMake options added to skip an
         integration whose library is installed but does not build with the toolchain in use
         (#843)
+- (!) refactor: the `real`, `imag`, and `modulus` CPOs constrain what a customization
+        returns. `real` and `imag` return a real value of the argument's tensor order and
+        `modulus` a real scalar. A customization returning anything else leaves the CPO
+        unsatisfied. `modulus` of a complex quantity doesn't compile any more, because `abs`
+        of such a quantity returns a complex quantity
 - feat: `representation_canonical_type` customization point added (materializes
         expression-template representations before storing them in a `quantity`)
 - feat: quantity character split into two orthogonal axes, `quantity_tensor_order` (scalar,

@@ -60,7 +60,7 @@ namespace mp_units::detail {
 }
 
 /**
- * @brief Provides compile-time rational arithmetic support.
+ * Provides compile-time rational arithmetic support.
  *
  * This class is really similar to @c std::ratio.  An important difference is the fact that the objects of that class
  * are used as class NTTPs rather then a type template parameter kind.
@@ -70,9 +70,10 @@ struct ratio {
   std::intmax_t den;
 
   // NOLINTNEXTLINE(bugprone-easily-swappable-parameters, google-explicit-constructor, hicpp-explicit-conversions)
-  MP_UNITS_CONSTEVAL_HACK explicit(false) ratio(std::intmax_t n, std::intmax_t d = 1) : num{n}, den{d}
+  MP_UNITS_CONSTEVAL_HACK explicit(false) ratio(std::intmax_t n, std::intmax_t d = 1) MP_UNITS_PRE(d != 0) :
+      num{n}, den{d}
   {
-    MP_UNITS_PRECONDITION(den != 0);
+    MP_UNITS_EXPECTS(d != 0);
     if (num == 0)
       den = 1;
     else {

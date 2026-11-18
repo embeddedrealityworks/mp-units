@@ -136,7 +136,7 @@ struct carried_kinds_result {
   using den = Den;
 };
 
-// Every `is_kind` ancestor-or-self of a quantity, as a sorted factor list. The nearest one is the
+// Every `subkind` ancestor-or-self of a quantity, as a sorted factor list. The nearest one is the
 // kind root, so the walk jumps straight to it, and a quantity whose kind root is the undeclared root
 // of its tree has none.
 template<typename Q>
@@ -222,8 +222,8 @@ struct kind_target_carried_kinds {
   using den = merge_quantity_spec_factors<typename explicit_netted::den, typename side::num_part::den>;
 };
 
-// What a named quantity carries: its `is_kind` chain (every `is_kind` ancestor-or-self) and
-// whatever its equation carries, recursively. A base quantity not declared `is_kind` carries
+// What a named quantity carries: its `subkind` chain (every `subkind` ancestor-or-self) and
+// whatever its equation carries, recursively. A base quantity not declared `subkind` carries
 // nothing. It is a class template, so the compiler computes it once per quantity.
 template<typename Q>
 struct carried_kinds : carried_kinds_result<decltype(detail::declared_kinds_of<Q>()), type_list<>> {};
@@ -918,6 +918,86 @@ template<conversion_rank Rank, typename FromNum, typename FromDen, typename ToNu
     return detail::best_expansion<deepest, false, false, 0, Rank, FromNum, FromDen, ToNum, ToDen, SourceIsKind>();
 }
 
+// Whether the equation of `Q` names another branch of its own tree, a quantity of that tree that is
+// not an ancestor of `Q` (`notional = price * count`, with `price` a sibling of `notional`). An
+// equation that names only an ancestor (`price = currency / count`) is not counted: pairing already
+// relates a factor to its ancestors.
+template<typename Q>
+[[nodiscard]] consteval bool equation_names_own_branch()
+{
+  if constexpr (!HasEquation<Q>)
+    return false;
+  else
+    return []<typename... Ts>(type_list<Ts...>) {
+      return (... || (std::is_same_v<hierarchy_root<expr_type<Ts>>, hierarchy_root<Q>> &&
+                      !detail::is_ancestor_or_self<expr_type<Ts>, Q>()));
+    }(type_list_join<typename equation_of<Q>::_num_, typename equation_of<Q>::_den_>{});
+}
+
+template<typename... Ts>
+[[nodiscard]] consteval bool any_names_own_branch(type_list<Ts...>)
+{
+  return (... || detail::equation_names_own_branch<expr_type<Ts>>());
+}
+
+// Every factor of one list, from position `I` on, whose equation names another branch of its own
+// tree is expanded in turn and the best rank is kept. The search stops at the first `implicit`.
+template<bool Source, bool InNum, std::size_t I, conversion_rank Rank, typename FromNum, typename FromDen,
+         typename ToNum, typename ToDen, bool SourceIsKind>
+[[nodiscard]] consteval conversion_rank best_own_tree_expansion()
+{
+  using list =
+    std::conditional_t<Source, std::conditional_t<InNum, FromNum, FromDen>, std::conditional_t<InNum, ToNum, ToDen>>;
+  if constexpr (I == type_list_size<list>)
+    return conversion_rank::none;
+  else {
+    using factor = expr_type<type_list_element<list, I>>;
+    constexpr conversion_rank here = [] {
+      if constexpr (!detail::equation_names_own_branch<factor>())
+        return conversion_rank::none;
+      else if constexpr (Source)
+        return detail::expand_source<Rank, FromNum, FromDen, ToNum, ToDen, InNum, I, SourceIsKind>();
+      else
+        return detail::expand_target<Rank, FromNum, FromDen, ToNum, ToDen, InNum, I, SourceIsKind>();
+    }();
+    if constexpr (here == conversion_rank::implicit)
+      return here;
+    else {
+      constexpr conversion_rank rest =
+        detail::best_own_tree_expansion<Source, InNum, I + 1, Rank, FromNum, FromDen, ToNum, ToDen, SourceIsKind>();
+      return here > rest ? here : rest;
+    }
+  }
+}
+
+// A sibling pairing ranks `cast`, but a factor whose equation names another branch of its own tree
+// may hide a better partner: `notional / count -> price` pairs `notional` with `price` as siblings,
+// while `notional` is defined as `price * count`. Expanding each such factor is tried as well, and
+// the best rank is kept, so that the verdict matches `notional -> price * count`. Pairing stays one
+// of the choices: `notional / count -> fee` remains `cast`, as `price -> fee` is.
+template<conversion_rank Rank, typename FromNum, typename FromDen, typename ToNum, typename ToDen, bool SourceIsKind>
+[[nodiscard]] consteval conversion_rank own_tree_expansion()
+{
+  using enum conversion_rank;
+  constexpr conversion_rank from_num =
+    detail::best_own_tree_expansion<true, true, 0, Rank, FromNum, FromDen, ToNum, ToDen, SourceIsKind>();
+  if constexpr (from_num == implicit)
+    return from_num;
+  else {
+    constexpr conversion_rank from_den =
+      detail::best_own_tree_expansion<true, false, 0, Rank, FromNum, FromDen, ToNum, ToDen, SourceIsKind>();
+    if constexpr (from_den == implicit)
+      return from_den;
+    else {
+      constexpr conversion_rank to_num =
+        detail::best_own_tree_expansion<false, true, 0, Rank, FromNum, FromDen, ToNum, ToDen, SourceIsKind>();
+      constexpr conversion_rank to_den =
+        detail::best_own_tree_expansion<false, false, 0, Rank, FromNum, FromDen, ToNum, ToDen, SourceIsKind>();
+      return detail::max({from_num, from_den, to_num, to_den});
+    }
+  }
+}
+
 // The two single-factor rules that come before pairing, in their order: exact equation first, then
 // a product of its own tree, the From side before the To side in each. Both are the same
 // substitution of the one factor. After an exact equation the two sides are the same product.
@@ -981,9 +1061,20 @@ template<conversion_rank Rank, typename FromNum, typename FromDen, typename ToNu
       constexpr conversion_rank rank = detail::weaker(Rank, detail::weaker(num::rank, den::rank));
       if constexpr (rank == none)
         return none;
-      else
-        return detail::reduce<rank, typename num::from_rest, typename den::from_rest, typename num::to_rest,
-                              typename den::to_rest, SourceIsKind>();
+      else {
+        constexpr conversion_rank paired = detail::reduce<rank, typename num::from_rest, typename den::from_rest,
+                                                          typename num::to_rest, typename den::to_rest, SourceIsKind>();
+        // nested so that the factors are scanned only when a pairing ranked `cast`
+        if constexpr (rank == cast && Rank > cast) {
+          if constexpr (detail::any_names_own_branch(type_list_join<FromNum, FromDen, ToNum, ToDen>{})) {
+            constexpr conversion_rank expanded =
+              detail::own_tree_expansion<Rank, FromNum, FromDen, ToNum, ToDen, SourceIsKind>();
+            return expanded > paired ? expanded : paired;
+          } else
+            return paired;
+        } else
+          return paired;
+      }
     } else if constexpr (to_size == 0) {
       // a ratio of two quantities of one dimension is a plain number
       using cancel = decltype(detail::self_cancel<type_list<>, FromNum, FromDen>());

@@ -27,6 +27,7 @@ known.
 
 from __future__ import annotations
 
+import html
 import importlib.util
 import posixpath
 import re
@@ -35,8 +36,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from properdocs.exceptions import PluginError
+from properdocs.plugins import get_plugin_logger
 from properdocs.structure.nav import Link, Section
 from properdocs.utils import get_relative_url
+
+# A warning logged here fails `properdocs build --strict`, and a print would not.
+_log = get_plugin_logger("mrdocs")
 
 # Where `mrdocs` writes its output, relative to `docs_dir`.
 API_DIR = "reference/api_reference/mrdocs"
@@ -67,6 +73,28 @@ _REF = re.compile(r"\]\[([A-Za-z_]\w*(?:::[\w~+\-*/%^&|!=<>\[\]()]+)+)\]")
 # generator emits ProperDocs directory URLs, relative to where the page is *served*.
 _HEADING = re.compile(r"^## (.+)$", re.MULTILINE)
 _MEMBER_LINK = re.compile(r'href="([^":#?]+/)"')
+
+# An example from a doc comment. MrDocs emits it as raw HTML, which Pygments
+# never sees: highlighting happens while the Markdown is rendered, and by then
+# this is already a finished element. Turning it back into a fenced block hands
+# it to the same machinery every other code block in the documentation goes
+# through, so an example is highlighted, carries a copy button, and is reachable
+# by the Compiler Explorer transform in `docs/javascripts/ce_embed.js`.
+_DOC_CODE = re.compile(r'(?s)<pre><code class="language-([\w+-]+)">(.*?)</code></pre>')
+
+# The line in an example that tells `scripts/check_doc_snippets.py` how to compile
+# it. The reader has no use for it, so `_fence` drops it.
+_SNIPPET_MARKER = re.compile(r"^[ \t]*//[ \t]*snippet-template:.*\n?", re.M)
+
+# A link from a doc comment into the hand-written documentation, written as
+# `[text](docs:users_guide/framework_basics/systems_of_units)`. The target is a
+# page under `docs/`, whichever section it belongs to: the user's guide, a how-to
+# guide, or a tutorial. A doc comment cannot spell the path itself: generated
+# pages sit at five different nesting depths, `nest_namespace_pages` moves them,
+# and the `legible-names` suffix in a page name is not stable between runs. The
+# scheme survives MrDocs untouched, so the hop is computed here, against the page
+# that is actually being rendered.
+_DOC_LINK = re.compile(r'(?<=href=")docs:([^"#]+)(#[^"]*)?(?=")')
 
 # A synopsis block, and what is worth colouring inside one.
 _SYNOPSIS = re.compile(
@@ -435,6 +463,94 @@ def _insert(section, nodes: list, pages: list) -> _Graft:
 # --------------------------------------------------------------------------
 
 
+# The reference documents the API a conforming compiler sees, so the workaround
+# macros are rendered as the spelling they take on one, the branch of their
+# definition in `bits/hacks.h` or `compat_macros.h` that needs no workaround.
+_MACRO_FORMS = {
+    "MP_UNITS_NTTP_HACK": "{}",
+    "MP_UNITS_NONCONST_TYPE": "decltype(auto({}))",
+}
+
+# Conditions that stay visible, because they are real variation in the API rather
+# than a workaround. `MP_UNITS_HOSTED` guards the `std::` fallbacks in constraints,
+# so a freestanding reader who is shown the guarded alternative alone is told an
+# unavailable path is available.
+_KEPT_CONDITIONS = ("MP_UNITS_HOSTED",)
+
+# Anything of ours still visible after the pass is a macro nobody has decided how
+# to render. Renaming one, or using a new one in an expression, lands here.
+_PROJECT_MACRO = re.compile(r"\bMP_UNITS_[A-Z0-9_]+")
+
+
+def _expand(text: str, name: str, form: str) -> str:
+    """Replace `NAME(arg)` with `form`, counting parentheses outside HTML tags.
+
+    A synopsis body is already marked up, so an anchor may sit inside the macro
+    argument, so the scan skips `<...>` spans and a bracket in a link cannot end
+    the argument early.
+    """
+    needle, out, pos = name + "(", [], 0
+    while (start := text.find(needle, pos)) != -1:
+        out.append(text[pos:start])
+        depth, i = 1, start + len(needle)
+        while i < len(text) and depth:
+            char = text[i]
+            if char == "<":  # an HTML tag, not a template bracket: skip it whole
+                end = text.find(">", i)
+                i = len(text) if end == -1 else end + 1
+                continue
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            i += 1
+        if depth:  # unbalanced, so leave the text alone rather than mangle it
+            out.append(text[start:])
+            return "".join(out)
+        out.append(form.format(text[start + len(needle) : i - 1]))
+        pos = i
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _conforming(markup: str) -> str:
+    """Spell a synopsis the way a conforming compiler reads it.
+
+    MrDocs builds its model from the preprocessed source, so declaration
+    specifiers arrive expanded (`MP_UNITS_CONSTEVAL` prints as `consteval`).
+    Constraint expressions and requires-clauses are echoed from the source text
+    instead, which carries the compatibility macros and the `#if MP_UNITS_HOSTED`
+    guards into the page. The macros are not API, so they are resolved here. The
+    `MP_UNITS_HOSTED` guards are kept (see `_KEPT_CONDITIONS`).
+    """
+
+    def one(match: re.Match) -> str:
+        opening, body, closing = match.groups()
+        for name, form in _MACRO_FORMS.items():
+            body = _expand(body, name, form)
+        return opening + body + closing
+
+    return _SYNOPSIS.sub(one, markup)
+
+
+def _leaked(markup: str, src_uri: str) -> None:
+    """Fail the build on a macro the reference has no spelling for.
+
+    The alternative is shipping a compiler workaround as though it were API,
+    which is invisible in review because the page still renders. `_MACRO_FORMS`
+    and `_KEPT_CONDITIONS` are the only places that need updating when one is
+    added or renamed.
+    """
+    for match in _SYNOPSIS.finditer(markup):
+        found = set(_PROJECT_MACRO.findall(match.group(2))) - set(_KEPT_CONDITIONS)
+        if names := sorted(found):
+            raise PluginError(
+                f"{src_uri}: synopsis still shows {', '.join(names)}. Add the "
+                f"spelling a conforming compiler sees to _MACRO_FORMS, or the "
+                f"condition to _KEPT_CONDITIONS, in scripts/mrdocs_xref.py."
+            )
+
+
 def _highlight(markup: str) -> str:
     """Colour keywords and comments in a synopsis, leaving links untouched."""
 
@@ -454,6 +570,49 @@ def _highlight(markup: str) -> str:
         return opening + "".join(parts) + closing
 
     return _SYNOPSIS.sub(one, markup)
+
+
+def _fence(markup: str) -> str:
+    """Rewrite MrDocs' raw-HTML examples as fenced code blocks."""
+
+    def one(match: re.Match) -> str:
+        language, body = match.groups()
+        body = html.unescape(body)
+        # The marker tells the snippet checker how to compile the example, or
+        # that it cannot be compiled at all. It is addressed to the build, not
+        # to the reader, so it is dropped on the way to the page.
+        body = _SNIPPET_MARKER.sub("", body)
+        # MrDocs opens the block with a newline of its own, which `<pre>` keeps
+        # and which would otherwise render as a blank first line.
+        body = body.strip("\n")
+        # A fence has to be longer than the longest backtick run it encloses.
+        longest = max((len(run) for run in re.findall(r"`+", body)), default=0)
+        fence = "`" * max(3, longest + 1)
+        # MrDocs puts the closing tag and whatever follows it on one line, so
+        # both fences are surrounded here. A fence only delimits a block when it
+        # sits on a line of its own, and gluing the closing one to the next
+        # sentence swallows the rest of the page into the listing.
+        return f"\n\n{fence}{language}\n{body}\n{fence}\n\n"
+
+    return _DOC_CODE.sub(one, markup)
+
+
+def _doc_links(markup: str, page, docs_dir: Path) -> str:
+    """Resolve `docs:` targets to a URL relative to the page being rendered.
+
+    The link sits in raw HTML that MrDocs emitted, so ProperDocs does not rewrite it
+    the way it rewrites a Markdown link: the served URL has to be built here, or
+    the `.md` suffix survives into the page and the link is dead.
+    """
+
+    def one(match: re.Match) -> str:
+        target, anchor = match.group(1), match.group(2) or ""
+        if not (docs_dir / f"{target}.md").is_file():
+            _log.warning(f"{page.file.src_uri} links to an unknown page '{target}'")
+            return match.group(0)
+        return get_relative_url(f"{target}/", page.url) + anchor
+
+    return _DOC_LINK.sub(one, markup)
 
 
 def _definitions(markdown: str, src_uri: str) -> str:
@@ -674,10 +833,38 @@ def on_post_page(output: str, page, config, **kwargs):
     return output
 
 
+_TITLE_CODE = re.compile(r"(?m)\A# `(.+)`$")
+_ENTITY = re.compile(r"&(lt|gt|amp|quot|#39);")
+_ENTITY_TEXT = {"lt": "<", "gt": ">", "amp": "&", "quot": '"', "#39": "'"}
+
+
+def _unescape(text: str) -> str:
+    return _ENTITY.sub(lambda m: _ENTITY_TEXT[m.group(1)], text)
+
+
+def _heading(markdown: str, page) -> str:
+    """Spell the angle brackets in a page title as themselves.
+
+    MrDocs escapes the declaration for HTML, so `operator<=>` arrives as
+    `operator&lt;=&gt;`. The page heading is a code span (see the
+    wrapper layout), and Markdown does not resolve entities inside one, so those
+    would reach the reader literally. The nav takes its text from `page.title`,
+    which is set from the same escaped front matter, so fix both.
+    """
+    if page.title:
+        page.title = _unescape(page.title)
+    return _TITLE_CODE.sub(lambda m: f"# `{_unescape(m.group(1))}`", markdown, count=1)
+
+
 def on_page_markdown(markdown: str, page, config, files, **kwargs):
     src_uri = page.file.src_uri
     if src_uri.startswith(f"{API_DIR}/"):
+        markdown = _conforming(markdown)
+        _leaked(markdown, src_uri)
         markdown = _highlight(markdown)
+        markdown = _heading(markdown, page)
+        markdown = _fence(markdown)
+        markdown = _doc_links(markdown, page, Path(config["docs_dir"]))
 
     definitions = _definitions(markdown, src_uri)
     return f"{markdown}\n\n{definitions}\n" if definitions else markdown

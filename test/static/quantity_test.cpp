@@ -1658,6 +1658,21 @@ static_assert(!(0. * m != 0));
 static_assert(!(0 * m != 0.));
 static_assert(!(0. * m != 0.));
 
+// Only a literal zero of a representation type compares against a quantity: neither `false` nor a
+// character such as `'\0'`.
+template<typename T>
+concept zero_comparable = requires(T val) { 0 * m == val; };
+static_assert(zero_comparable<int> && zero_comparable<double>);
+static_assert(zero_comparable<signed char> && zero_comparable<unsigned char>);
+static_assert(!zero_comparable<bool>);
+static_assert(!zero_comparable<char>);
+static_assert(!zero_comparable<wchar_t>);
+static_assert(!zero_comparable<char16_t>);
+static_assert(!zero_comparable<char32_t>);
+#ifdef __cpp_char8_t
+static_assert(!zero_comparable<char8_t>);
+#endif
+
 ///////////////////////
 // ordering operators
 ///////////////////////
@@ -1960,5 +1975,49 @@ static_assert(std::equality_comparable_with<std::optional<quantity<si::volt, std
 static_assert(std::equality_comparable_with<std::optional<quantity<si::metre, utility::cartesian_vector<double>>>,
                                             quantity<si::metre, utility::cartesian_vector<double>>>);
 #endif
+
+}  // namespace
+
+
+// `representation_canonical_type` forwards a `const` and a reference to the unqualified type, so that a
+// specialization for an expression-template proxy applies to every result type an operator can yield
+namespace {
+
+struct canonical_test_proxy {};
+
+}  // namespace
+
+template<>
+struct mp_units::representation_canonical_type<canonical_test_proxy> {
+  using type = double;
+};
+
+namespace {
+
+using namespace mp_units;
+
+static_assert(std::same_as<representation_canonical_type_t<int>, int>);
+static_assert(std::same_as<representation_canonical_type_t<const int&>, int>);
+static_assert(std::same_as<representation_canonical_type_t<canonical_test_proxy>, double>);
+static_assert(std::same_as<representation_canonical_type_t<const canonical_test_proxy>, double>);
+static_assert(std::same_as<representation_canonical_type_t<canonical_test_proxy&>, double>);
+static_assert(std::same_as<representation_canonical_type_t<const canonical_test_proxy&>, double>);
+static_assert(std::same_as<representation_canonical_type_t<canonical_test_proxy&&>, double>);
+
+// An operand of `+`, `-`, `%`, or a comparison that already has the representation type and an
+// equivalent unit of the common quantity is read by reference instead of being copied (GH #837), also
+// when its quantity specification differs. Any other operand is converted.
+template<typename Common, typename Q>
+using to_common_quantity_result = decltype(detail::to_common_quantity<Common>(std::declval<const Q&>()));
+
+static_assert(std::same_as<to_common_quantity_result<quantity<si::metre, int>, quantity<si::metre, int>>,
+                           const quantity<si::metre, int>&>);
+static_assert(
+  std::same_as<to_common_quantity_result<quantity<isq::length[si::metre], int>, quantity<isq::height[si::metre], int>>,
+               const quantity<isq::height[si::metre], int>&>);
+static_assert(std::same_as<to_common_quantity_result<quantity<si::metre, double>, quantity<si::metre, int>>,
+                           quantity<si::metre, double>>);
+static_assert(std::same_as<to_common_quantity_result<quantity<si::metre, int>, quantity<si::kilo<si::metre>, int>>,
+                           quantity<si::metre, int>>);
 
 }  // namespace

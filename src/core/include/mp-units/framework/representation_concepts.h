@@ -155,6 +155,115 @@ concept Complex = (numeric_field<T> == quantity_field::complex);
 template<typename T>
 concept RealScalar = Real<T> && BaseScalar<T> && std::totally_ordered<T>;
 
+}  // namespace detail
+
+
+/////////////// real / imag / modulus CUSTOMIZATION POINTS ///////////////
+
+namespace detail {
+
+// The real and imaginary parts of a representation are real and keep its tensor order. A complex
+// scalar yields a `RealScalar`, and a complex vector or tensor yields a real one of the same order.
+// `R` is decayed because the CPOs return by value whatever the customization returns.
+template<typename R, typename T>
+concept RealCounterpartOf = Real<std::remove_cvref_t<R>> && (tensor_order<std::remove_cvref_t<R>> == tensor_order<T>) &&
+                            (tensor_order<T> != 0 || RealScalar<std::remove_cvref_t<R>>);
+
+// The modulus |z| of a scalar is a real scalar. The length of a vector comes from `magnitude`.
+template<typename R>
+concept ModulusResult = RealScalar<std::remove_cvref_t<R>>;
+
+}  // namespace detail
+
+// The return-type constraint is repeated in each `requires`-clause, branch by branch in the order of
+// the `if constexpr` chain. A constrained placeholder alone is checked only while deducing the return
+// type, so a customization returning the wrong type would be a hard error instead of an unsatisfied
+// constraint. Following the chain also keeps a member returning the wrong type from falling through
+// to the free function.
+
+namespace detail::real_impl {
+
+struct real_t {
+  template<typename T>
+  [[nodiscard]] constexpr RealCounterpartOf<T> auto operator()(const T& clx) const
+    requires requires { { clx.real() } -> RealCounterpartOf<T>; } ||
+             (!requires { clx.real(); } && requires { { real(clx) } -> RealCounterpartOf<T>; })
+  {
+    if constexpr (requires { clx.real(); })
+      return clx.real();
+    else if constexpr (requires { real(clx); })
+      return real(clx);
+  }
+};
+
+}  // namespace detail::real_impl
+
+inline namespace cpo {
+
+MP_UNITS_EXPORT inline constexpr ::mp_units::detail::real_impl::real_t real;
+
+}
+
+namespace detail::imag_impl {
+
+struct imag_t {
+  template<typename T>
+  [[nodiscard]] constexpr RealCounterpartOf<T> auto operator()(const T& clx) const
+    requires requires { { clx.imag() } -> RealCounterpartOf<T>; } ||
+             (!requires { clx.imag(); } && requires { { imag(clx) } -> RealCounterpartOf<T>; })
+  {
+    if constexpr (requires { clx.imag(); })
+      return clx.imag();
+    else if constexpr (requires { imag(clx); })
+      return imag(clx);
+  }
+};
+
+}  // namespace detail::imag_impl
+
+inline namespace cpo {
+
+MP_UNITS_EXPORT inline constexpr ::mp_units::detail::imag_impl::imag_t imag;
+
+}
+
+namespace detail::modulus_impl {
+
+void modulus() = delete;  // poison pill
+void abs() = delete;      // poison pill
+
+struct modulus_t {
+  template<typename T>
+  [[nodiscard]] constexpr ModulusResult auto operator()(const T& clx) const
+    requires requires { { clx.modulus() } -> ModulusResult; } ||
+             (!requires { clx.modulus(); } && requires { { modulus(clx) } -> ModulusResult; }) ||
+             (!requires { clx.modulus(); } && !requires { modulus(clx); } &&
+              requires { { clx.abs() } -> ModulusResult; }) ||
+             (!requires { clx.modulus(); } && !requires { modulus(clx); } && !requires { clx.abs(); } &&
+              requires { { abs(clx) } -> ModulusResult; })
+  {
+    if constexpr (requires { clx.modulus(); })
+      return clx.modulus();
+    else if constexpr (requires { modulus(clx); })
+      return modulus(clx);
+    // `std` made a precedence of using `abs` for modulus on `std::complex`
+    else if constexpr (requires { clx.abs(); })
+      return clx.abs();
+    else if constexpr (requires { abs(clx); })
+      return abs(clx);
+  }
+};
+
+}  // namespace detail::modulus_impl
+
+inline namespace cpo {
+
+MP_UNITS_EXPORT inline constexpr ::mp_units::detail::modulus_impl::modulus_t modulus;
+
+}
+
+namespace detail {
+
 // A complex scalar is `Complex` (so `real`/`imag` work) and, on top of the shared scalar algebra,
 // supports `modulus` and reconstruction from its parts. Construction from `(real, imag)` is what
 // lets users (and the framework's complex paths) build and round-trip a value efficiently.
@@ -174,6 +283,33 @@ concept Scalar = (RealScalar<T> || ComplexScalar<T>) && tensor_order<T> == 0;
 }  // namespace detail
 
 
+namespace detail {
+
+// A total predicate, for a contract that has to appear on a declaration. A declaration contract
+// cannot be wrapped in `if constexpr`, and an unconditional predicate would narrow the set of
+// representations a function accepts: `abs` supports a complex `quantity`, and an unguarded
+// `!(v < 0)` postcondition on it is a hard error for exactly the types that have no ordering.
+// Answering `true` where the comparison cannot be spelled keeps the contract well-formed for every
+// `T` and simply says nothing where it cannot speak.
+template<typename T>
+[[nodiscard]] constexpr bool value_is_non_negative(const T& value)
+{
+  // `!(v < 0)` and not `v >= 0`: every comparison with a NaN is false, so the positive form reports
+  // a NaN as negative, and on a `quantity` it is worse than it looks - `>=` rewrites to
+  // `(lhs <=> rhs) >= 0`, and `partial_ordering::unordered >= 0` is false too. `abs` of a NaN is a
+  // NaN and has to pass. The zero is `value - value` because the header defining `get_zero`
+  // includes this one.
+  if constexpr (requires {
+                  { value < (value - value) } -> std::convertible_to<bool>;
+                })
+    return !(value < (value - value));
+  else
+    return true;
+}
+
+}  // namespace detail
+
+
 /////////////// MAGNITUDE ///////////////
 
 namespace detail::magnitude_impl {
@@ -183,12 +319,11 @@ void norm() = delete;       // poison pill
 void abs() = delete;        // poison pill
 
 struct magnitude_t {
+  // Split out only so the body can name the result. The GSL backends have no declaration contract,
+  // so `MP_UNITS_POST_COMPAT` has to check a named value; the native backend does not need it, as
+  // `MP_UNITS_POST` on `operator()` below is the real contract.
   template<typename T>
-  [[nodiscard]] constexpr Scalar auto operator()(const T& vec) const
-    requires requires { vec.magnitude(); } || requires { magnitude(vec); } ||
-             (!Scalar<T> && (requires { vec.norm(); } || requires { norm(vec); })) ||
-             (RealScalar<T> && (std::is_arithmetic_v<T> || requires { vec.abs(); } || requires { abs(vec); })) ||
-             ComplexScalar<T>
+  [[nodiscard]] static constexpr Scalar auto dispatch(const T& vec)
   {
     if constexpr (requires { vec.magnitude(); })
       return vec.magnitude();
@@ -219,6 +354,23 @@ struct magnitude_t {
     else if constexpr (requires { abs(vec); })
       return abs(vec);
   }
+
+  // Every branch above reaches code the library does not own: `vec.magnitude()` and an ADL `norm()`
+  // are the documented customization points, and GLM arrives through the `magnitude()` overload the
+  // integration header wraps around `glm::length()`. A norm is non-negative by definition, nothing
+  // in the concept can say so, and a negative one propagates silently into whatever consumes it.
+  template<typename T>
+  [[nodiscard]] constexpr Scalar auto operator()(const T& vec) const
+    requires requires { vec.magnitude(); } || requires { magnitude(vec); } ||
+             (!Scalar<T> && (requires { vec.norm(); } || requires { norm(vec); })) ||
+             (RealScalar<T> && (std::is_arithmetic_v<T> || requires { vec.abs(); } || requires { abs(vec); })) ||
+             ComplexScalar<T>
+    MP_UNITS_POST(r: detail::value_is_non_negative(r))
+  {
+    const Scalar auto result = dispatch(vec);
+    MP_UNITS_POST_COMPAT(detail::value_is_non_negative(result));
+    return result;
+  }
 };
 
 }  // namespace detail::magnitude_impl
@@ -237,14 +389,14 @@ namespace detail {
 // treat_as_floating_point (not std::floating_point) is intentional: it is the library's
 // extensibility point for user-defined floating-point-like types (e.g. a fixed-size float
 // wrapper).  scale_fp() computes the magnitude constant via get_value<long double> and
-// then static_cast<element_t>()s it, so element_t must be explicitly convertible from long double.
+// then silent_cast<element_t>()s it, so element_t must be explicitly convertible from long double.
 // The concept also covers container types whose element type is floating-point (e.g.
 // cartesian_vector<double>): treat_as_floating_point<value_type_t<T>> is checked so that
 // the FP scaling path is taken even when T itself is not floating-point.
 //
 // The scaled result need not be `T` itself, nor even weakly-regular: expression-template
 // linear algebra libraries (e.g. Eigen, Blaze) return lazy proxy types from `operator*` /
-// `operator/` rather than a materialized vector/matrix.  `scale()` always materializes the
+// `operator/` rather than a materialized vector/matrix.  `scale_by_magnitude()` always materializes the
 // result via `static_cast<To>` (direct-initialization), so it is sufficient that `T` be
 // constructible from the scaled result.
 //
@@ -292,15 +444,15 @@ concept UsesIntegerScaling = integral<value_type_t<T>> && requires(T value, wide
 };
 
 // A type that provides its own magnitude-aware operator*(T, UnitMagnitude) customization
-// point.  scale() will prefer this path when available, and the return type may differ
+// point.  scale_by_magnitude() will prefer this path when available, and the return type may differ
 // from the input (e.g. a wrapper with scaled bounds).
 template<typename T>
 concept UsesUnitMagnitudeAwareScaling = requires(const T& v) { v * mag<1>; };
 
 /**
- * @brief UnitMagnitudeScalable
+ * UnitMagnitudeScalable
  *
- * A type is `UnitMagnitudeScalable` if the library's `scale()` can apply a unit
+ * A type is `UnitMagnitudeScalable` if the library's `scale_by_magnitude()` can apply a unit
  * magnitude ratio to it.  The three sub-concepts map to the scaling paths:
  *
  *  - `UsesUnitMagnitudeAwareScaling<T>` — type provides `operator*(T, UnitMagnitude)` (preferred)

@@ -30,8 +30,12 @@
 import std;
 #else
 #include <cmath>
+#include <cstddef>
+#include <cstring>
 #include <limits>
+#include <new>
 #include <stdexcept>
+#include <string_view>
 #endif
 
 using namespace mp_units;
@@ -61,6 +65,17 @@ using safe_double = constrained<double, throw_policy>;
 using qp_check = quantity_point<test_angle_check[deg], check_origin, safe_double>;
 
 }  // namespace
+
+// Default-initialization of a bounded point stores the origin. The storage is filled with a NaN pattern
+// first, so a constructor that left the delta indeterminate would leave the NaN behind.
+TEST_CASE("default-initialization of a bounded point stores the origin", "[bounded][default]")
+{
+  using bounded_pt = quantity_point<test_angle_check[deg], check_origin>;
+  alignas(bounded_pt) std::byte storage[sizeof(bounded_pt)];
+  std::memset(storage, 0xff, sizeof(storage));
+  const auto* constructed = ::new (static_cast<void*>(storage)) bounded_pt;
+  CHECK(constructed->delta_from(check_origin) == 0. * deg);
+}
 
 TEST_CASE("check_in_range throws on construction outside bounds", "[bounded][check]")
 {
@@ -327,6 +342,123 @@ TEST_CASE("try_make rejects NaN through a relative origin without own bounds", "
 {
   CHECK_FALSE(trim_offset2::try_make(not_a_number * deg, trim_centre_plus_one).has_value());
   CHECK(trim_offset2::try_make(4. * deg, trim_centre_plus_one).has_value());
+}
+
+#endif  // MP_UNITS_HAS_EXPECTED
+
+// ============================================================================
+// A conversion through a frame projection applies the bounds of the target origin once, through
+// the handler of the target representation. It used to construct a point at the target origin on
+// the way, whose representation was `double` (the offset of proj_window is a `double`), so that
+// check was a precondition and, with a contract backend, terminated the program.
+// ============================================================================
+
+namespace {
+
+struct counting_policy {
+  static inline int violations = 0;
+  static void on_constraint_violation(std::string_view) { ++violations; }
+};
+
+using counted_double = constrained<double, counting_policy>;
+
+QUANTITY_SPEC(proj_length, isq::length);
+
+inline constexpr struct proj_src final : absolute_point_origin<proj_length> {
+} proj_src;
+
+inline constexpr struct proj_tgt final : absolute_point_origin<proj_length> {
+} proj_tgt;
+
+inline constexpr struct proj_window final :
+    relative_point_origin<quantity_point<proj_length[m], proj_tgt, double>{100. * m, proj_tgt},
+                          check_in_range{0. * m, 10. * m}> {
+} proj_window;
+
+using proj_src_pt = quantity_point<proj_length[m], proj_src, counted_double>;
+using proj_window_pt = quantity_point<proj_length[m], proj_window, counted_double>;
+
+int projections = 0;
+
+}  // namespace
+
+template<>
+inline constexpr auto mp_units::frame_projection<proj_src, proj_tgt> =
+  [](mp_units::QuantityPointOf<proj_length> auto qp) {
+    ++projections;
+    return proj_tgt - qp.delta_from(proj_src);
+  };
+
+TEST_CASE("a conversion through a frame projection reports a violation once", "[bounded][projection]")
+{
+  counting_policy::violations = 0;
+  projections = 0;
+  const proj_window_pt p{proj_src_pt{-120. * m, proj_src}};
+  CHECK(counting_policy::violations == 1);
+  CHECK(projections == 1);
+  // The handler returned, so the value is stored unchanged.
+  CHECK(p.delta_from(proj_window) == proj_window_pt{20. * m, proj_window}.delta_from(proj_window));
+}
+
+TEST_CASE("point_for reports a violation through the handler of the representation", "[bounded][handler]")
+{
+  // The offset of proj_window is a double, which used to make the result a point of double.
+  counting_policy::violations = 0;
+  const quantity_point<proj_length[m], proj_tgt, counted_double> at_tgt{120. * m, proj_tgt};
+  const auto in_window = at_tgt.point_for(proj_window);
+  CHECK(counting_policy::violations == 1);
+  CHECK(std::same_as<std::remove_cvref_t<decltype(in_window)>, proj_window_pt>);
+}
+
+#if MP_UNITS_HAS_EXPECTED
+
+TEST_CASE("try_make from a projected point does not invoke the handler", "[bounded][projection][try_make]")
+{
+  counting_policy::violations = 0;
+  CHECK_FALSE(proj_window_pt::try_make(proj_src_pt{-120. * m, proj_src}).has_value());
+  CHECK(proj_window_pt::try_make(proj_src_pt{-105. * m, proj_src}).has_value());
+  CHECK(counting_policy::violations == 0);
+}
+
+TEST_CASE("try_make from a projected point projects it once", "[bounded][projection][try_make]")
+{
+  projections = 0;
+  CHECK(proj_window_pt::try_make(proj_src_pt{-105. * m, proj_src}).has_value());
+  CHECK(projections == 1);
+}
+
+namespace {
+
+// A user-defined checking policy that counts its evaluations.
+struct counting_check {
+  quantity<proj_length[m], double> min;
+  quantity<proj_length[m], double> max;
+  static inline int calls = 0;
+  template<Quantity V>
+  constexpr bool operator()(V v) const
+  {
+    ++calls;
+    return V{min} <= v && v <= V{max};
+  }
+};
+
+inline constexpr struct counted_zero final :
+    absolute_point_origin<proj_length, counting_check{0. * proj_length[m], 10. * proj_length[m]}> {
+} counted_zero;
+
+}  // namespace
+
+TEST_CASE("try_make evaluates the checking policy once", "[bounded][try_make]")
+{
+  // With a handler, the constructor evaluates the policy itself, so constructing after the test
+  // would evaluate it twice.
+  using counted_pt = quantity_point<proj_length[m], counted_zero, counted_double>;
+  counting_check::calls = 0;
+  CHECK(counted_pt::try_make(5. * proj_length[m], counted_zero).has_value());
+  CHECK(counting_check::calls == 1);
+  counting_check::calls = 0;
+  CHECK_FALSE(counted_pt::try_make(11. * proj_length[m], counted_zero).has_value());
+  CHECK(counting_check::calls == 1);
 }
 
 #endif  // MP_UNITS_HAS_EXPECTED

@@ -608,7 +608,7 @@ arithmetic operations.
     - **_Geometric Azimuth_** (mirrored): 0° = East, counter-clockwise, wraps [-180°, 180°)
     - **_Heading_** (mirrored): 0° = North, counter-clockwise, wraps [-180°, 180°)
         - Conversion: `heading = geometric_azimuth - 90°` (simple offset)
-        - Uses `relative_point_origin<east + delta<geometric_azimuth[degree]>(-90.)>`
+        - Uses `relative_point_origin<east + delta<geometric_azimuth[degree]>(90.)>`
     - **_Bearing_** (mirrored): 0° = North, clockwise, wraps [-180°, 180°)
         - Conversion: `bearing = 90° - geometric_azimuth` (involves negation)
         - Cannot use `relative_point_origin` (requires separate `absolute_point_origin`)
@@ -624,7 +624,7 @@ arithmetic operations.
     separate `absolute_point_origin` types connected via `frame_projection`. This ensures
     type safety while allowing the framework to handle coordinate transformations automatically.
 
-    **Type Safety with `is_kind`**: All geographic quantity specs use `is_kind` to prevent
+    **Type Safety with `subkind`**: All geographic quantity specs use `subkind` to prevent
     accidental mixing of different angle types (e.g., `latitude + longitude`, `bearing + heading`).
     This requires explicit conversion when using trigonometric functions:
 
@@ -765,6 +765,15 @@ Bounds are enforced at these points:
 
 After each mutation the library transparently applies the bounds policy specified on the origin.
 
+A bounded point is default-constructed at its origin. Value-initialization, as in
+`point_type{}`, and default-initialization, as in `point_type p;`, both store a zero delta,
+which is the origin itself. A bounded point therefore never holds an indeterminate value,
+and its default constructor is offered only where the origin lies within the range of the
+policy, as its `min` and `max` declare. With `check_in_range{10 * m, 20 * m}` on an
+absolute origin, neither form compiles, and neither does `std::vector<point_type>(n)`, since
+each would store 0 m. A point without bounds is default-constructed like its representation
+type, so with `double` default-initialization leaves its delta indeterminate.
+
 ### Bounds the Point Can Hold
 
 A policy compares a value with its bounds in the value's own type. Each bound therefore has
@@ -865,6 +874,21 @@ _Hierarchical bounds validation_ note in the
     Without a bounds policy, `std::numeric_limits` delegates to the representation type's
     limits.
 
+    `lowest()` returns `min()` in both cases. Where bounds apply, own or inherited, each of
+    `epsilon()`, `round_error()`, `infinity()`, `quiet_NaN()`, `signaling_NaN()`, and
+    `denorm_min()` is offered only where its value lies within the range that the bounds
+    declare by their `min` and `max`, the rule of default construction:
+
+    - On `[0, ∞)`, as with `check_non_negative`, `infinity()` is offered, and so are the
+      positive finite values of `epsilon()`, `round_error()`, and `denorm_min()`.
+    - On `[-10°, 10°]` only those three are, and on `(-∞, 0]` none of the six.
+    - A NaN lies in no range, so `quiet_NaN()` and `signaling_NaN()` are never offered where
+      bounds apply, even with a policy such as `clamp_to_range` that would store one.
+
+    `has_infinity`, `has_quiet_NaN`, and `has_signaling_NaN` are `true` exactly where the
+    matching member is offered. `is_iec559` is `false` wherever bounds apply, since a range
+    doesn't hold every value of the format.
+
 ### Validating Untrusted Values
 
 A value read from a sensor, a bus, or persistent storage often has to be rejected without
@@ -898,9 +922,39 @@ std::expected<trim_angle, bounds_violation> try_make_trim(quantity<si::degree> r
 }
 ```
 
+`try_make` tests the value once. A value that passes is stored without the constructor
+testing it again.
+
+Both functions also take a point of another type, and test the conversion that
+constructing the point from it performs. The point may be measured from another origin
+with the same absolute origin, be stored in another unit or representation, be a
+point-like type measured from the origin of the target, or come from another absolute
+origin through a [frame projection](#frame-proj). Here a `trim_angle` is converted to a
+point measured from a narrower origin:
+
+```cpp
+inline constexpr struct takeoff_trim :
+    relative_point_origin<trim_zero + 0. * deg, check_in_range{-5. * deg, 5. * deg}> {} takeoff_trim;
+
+using takeoff_angle = quantity_point<si::degree, takeoff_trim>;
+
+std::expected<takeoff_angle, bounds_violation> for_takeoff(trim_angle trim)
+{
+  return takeoff_angle::try_make(trim);
+}
+```
+
+A frame projection is given a point at the absolute origin of the source, unless the
+source is measured from there already, and returns a point in the frame of the target.
+Constructing either of them applies the bounds of its origin, and a checking policy there
+would report a rejected value as a violation instead of as `false` or a
+`bounds_violation`. For a point from another absolute origin, both functions are therefore
+offered only when no checking policy applies to these points.
+
 A rejected value is never passed to the constructor. The representation's violation
 handler is not called and no precondition is violated, so both functions work in code
-built with `-fno-exceptions` and under any contract evaluation semantic.
+built with `-fno-exceptions` and under any contract evaluation semantic, apart from
+anything a frame projection does itself, such as throwing.
 
 The test follows construction in two steps:
 
@@ -1077,14 +1131,14 @@ namespace si {
 inline constexpr struct kelvin :
     named_unit<"K", kind_of<isq::thermodynamic_temperature>, absolute_zero> {} kelvin;
 inline constexpr struct degree_Celsius :
-    named_unit<{u8"℃", "`C"}, kelvin, ice_point> {} degree_Celsius;
+    named_unit<{u8"°C", "`C"}, kelvin, ice_point> {} degree_Celsius;
 
 }
 
 namespace usc {
 
 inline constexpr struct degree_Fahrenheit :
-    named_unit<{u8"℉", "`F"}, mag_ratio<5, 9> * si::degree_Celsius,
+    named_unit<{u8"°F", "`F"}, mag_ratio<5, 9> * si::degree_Celsius,
                fahrenheit_zero> {} degree_Fahrenheit;
 
 }
@@ -1172,14 +1226,14 @@ print_temp("Clamped to max", clamped);
 The above prints:
 
 ```text
-Room reference temperature: 21 ℃ (69.8 ℉, 294.15 K)
+Room reference temperature: 21 °C (69.8 °F, 294.15 K)
 
 | Temperature delta  |   Room reference   |     Ice point      |   Absolute zero    |
 |====================|====================|====================|====================|
-| Lowest             |       -3 ℃        |       18 ℃        |     291.15 ℃      |
-| Default            |        0 ℃        |       21 ℃        |     294.15 ℃      |
-| Highest            |        3 ℃        |       24 ℃        |     297.15 ℃      |
-| Clamped to max     |        3 ℃        |       24 ℃        |     297.15 ℃      |
+| Lowest             |       -3 °C        |       18 °C        |     291.15 °C      |
+| Default            |        0 °C        |       21 °C        |     294.15 °C      |
+| Highest            |        3 °C        |       24 °C        |     297.15 °C      |
+| Clamped to max     |        3 °C        |       24 °C        |     297.15 °C      |
 ```
 
 
@@ -1203,7 +1257,7 @@ Text output is supported for `quantity_point` when its point origin equals
 
     ```cpp
     quantity_point temp = point<deg_C>(20.);
-    std::cout << temp;  // "20 ℃"
+    std::cout << temp;  // "20 °C"
     ```
 
 Text output is **not** provided when a non-default origin is used, for example:
