@@ -398,7 +398,7 @@ struct named_unit<Symbol, QS> : detail::unit_interface {
   static constexpr auto _quantity_spec_ = QS;
 };
 
-template<symbol_text Symbol, detail::QuantityKindSpec auto QS, PointOrigin auto PO>
+template<symbol_text Symbol, detail::QuantityKindSpec auto QS, detail::PointOrigin auto PO>
   requires(!Symbol.empty()) &&
           (detail::BaseDimension<MP_UNITS_NONCONST_TYPE(QS._dimension_)> || detail::remove_kind(QS) == dimensionless)
 struct named_unit<Symbol, QS, PO> : detail::unit_interface {
@@ -423,7 +423,7 @@ struct named_unit<Symbol, U> : decltype(U)::_base_type_ {
   static constexpr auto _symbol_ = Symbol;  ///< Unique unit identifier
 };
 
-template<symbol_text Symbol, Unit auto U, PointOrigin auto PO>
+template<symbol_text Symbol, Unit auto U, detail::PointOrigin auto PO>
   requires(!Symbol.empty()) && detail::is_positive_canonical_unit_mag<U>
 struct named_unit<Symbol, U, PO> : decltype(U)::_base_type_ {
   using _base_type_ = named_unit;           // exposition only
@@ -449,7 +449,7 @@ struct named_unit<Symbol, U, QS> : decltype(U)::_base_type_ {
   static constexpr auto _quantity_spec_ = QS;
 };
 
-template<symbol_text Symbol, Unit auto U, detail::QuantityKindSpec auto QS, PointOrigin auto PO>
+template<symbol_text Symbol, Unit auto U, detail::QuantityKindSpec auto QS, detail::PointOrigin auto PO>
   requires(!Symbol.empty()) && (QS._dimension_ == detail::get_associated_quantity(U)._dimension_) &&
           detail::is_positive_canonical_unit_mag<U>
 struct named_unit<Symbol, U, QS, PO> : decltype(U)::_base_type_ {
@@ -782,9 +782,19 @@ template<detail::SymbolicTerm... Expr>
 struct derived_unit final : detail::derived_unit_impl<Expr...> {};
 
 /**
- * Unit one
+ * The unit of a quantity of dimension one
  *
- * Unit of a dimensionless quantity.
+ * A ratio of two quantities of the same dimension converts to it:
+ *
+ * @code{.cpp}
+ * quantity zoom = (2. * km / (500. * m)).in(one);  // 4
+ * @endcode
+ *
+ * @see @ref percent for hundredths
+ * @see @ref per_mille for thousandths
+ * @see @ref parts_per_million for millionths
+ * @see [Dimensionless Quantities](docs:users_guide/framework_basics/dimensionless_quantities) in the
+ * User's Guide
  */
 // clang-format off
 MP_UNITS_EXPORT inline constexpr struct one final : detail::derived_unit_impl<> {} one;

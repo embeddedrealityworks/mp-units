@@ -8,6 +8,18 @@ This page documents the version history and changes for the **mp-units** library
 
 ### 2.6.0 <small>TBD</small> { id="2.6.0" }
 
+- feat: `numerical_value_in<Rep>(unit)` and `numerical_value_in<Rep>(unit, policy)` return
+      the numerical value in another representation type, with the rules of
+      `in<Rep>(unit)` and `in<Rep>(unit, policy)`, for a quantity and for a point at its
+      default origin
+- (!) refactor: `QuantityLike` and `QuantityPointLike` are implementation details, as in
+      P3045. A type that `quantity_like_traits` or `quantity_point_like_traits` describes
+      converts as before. Code that named a concept, such as a `static_assert` checking a
+      traits specialization, checks the conversion instead
+- refactor: `DimensionOf` and `PointOrigin` are deprecated, as P3045 no longer proposes
+      them. `PointOriginFor` stays as the way to constrain an origin. The deprecation warns
+      on GCC 13 and Clang 19 and later, the first compilers to accept `[[deprecated]]` on
+      a concept
 - fix: `wrap_to_range` and `reflect_in_range` no longer overflow a standard integer
       representation when the length of the range, or the period of the reflection (twice
       that length), exceeds the representation's maximum
@@ -244,9 +256,11 @@ This page documents the version history and changes for the **mp-units** library
       `quantity_point`, and of the `std::common_type` of two quantities, as the plain type
       (`int`) instead of the library's internal spelling
       (`representation_canonical_type_t<int>`, `typename Q::rep`, or
-      `std::common_type_t<short, unsigned char>`). Multiplying or dividing a unit by a
-      `quantity` now states why it is ill-formed, as multiplying a unit by a number already
-      did.
+      `std::common_type_t<short, unsigned char>`). A `quantity` deduced from a value alone,
+      such as `quantity{42}`, keeps the internal spelling: the plain one would cost two
+      constraint checks in every `quantity x = other_quantity;`. Multiplying or dividing a
+      unit by a `quantity` now states why it is ill-formed, as multiplying a unit by a
+      number already did.
 - fix: a rejected `+`, `-`, `%`, `==` or `<=>` on two quantities of different kinds, and a
       rejected `hypot`, report that the quantities have no common quantity instead of an
       invalid call to `get_common_reference`. Three more mistakes get a sentence: a raw

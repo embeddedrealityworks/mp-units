@@ -918,7 +918,7 @@ public:
   {
   }
 
-  template<QuantityLike Q>
+  template<detail::QuantityLike Q>
     requires detail::QuantityConstructibleFrom<quantity, detail::quantity_like_type<Q>>
   [[nodiscard]] constexpr explicit(quantity_like_traits<Q>::explicit_import ||
                                    // NOLINTNEXTLINE(google-explicit-constructor, hicpp-explicit-conversions)
@@ -956,21 +956,21 @@ public:
     return detail::sudo_cast<quantity<detail::make_reference(quantity_spec, ToU{}), ToRep>>(*this);
   }
 
-  template<UnitOf<quantity_spec> ToU, RoundingPolicy Policy>
+  template<UnitOf<quantity_spec> ToU, detail::RoundingPolicy Policy>
     requires detail::ExplicitlyCastable<unit, ToU{}, rep> && detail::ValidRoundingPolicyFor<Policy, rep, rep>
   [[nodiscard]] constexpr QuantityOf<quantity_spec> auto in(ToU, Policy policy) const
   {
     return value_cast<ToU{}>(*this, policy);
   }
 
-  template<RepresentationOf<quantity_spec> ToRep, RoundingPolicy Policy>
+  template<RepresentationOf<quantity_spec> ToRep, detail::RoundingPolicy Policy>
     requires std::constructible_from<ToRep, rep> && detail::ValidRoundingPolicyFor<Policy, rep, ToRep>
   [[nodiscard]] constexpr QuantityOf<quantity_spec> auto in(Policy policy) const
   {
     return value_cast<ToRep>(*this, policy);
   }
 
-  template<RepresentationOf<quantity_spec> ToRep, UnitOf<quantity_spec> ToU, RoundingPolicy Policy>
+  template<RepresentationOf<quantity_spec> ToRep, UnitOf<quantity_spec> ToU, detail::RoundingPolicy Policy>
     requires std::constructible_from<ToRep, rep> && detail::ExplicitlyCastable<unit, ToU{}, ToRep> &&
              detail::ValidRoundingPolicyFor<Policy, rep, ToRep>
   [[nodiscard]] constexpr QuantityOf<quantity_spec> auto in(ToU, Policy policy) const
@@ -1055,11 +1055,28 @@ public:
     return in(U{}).numerical_value_is_an_implementation_detail_;
   }
 
-  template<UnitOf<quantity_spec> U, RoundingPolicy Policy>
+  template<UnitOf<quantity_spec> U, detail::RoundingPolicy Policy>
     requires detail::ExplicitlyCastable<unit, U{}, rep> && detail::ValidRoundingPolicyFor<Policy, rep, rep>
   [[nodiscard]] constexpr RepresentationOf<quantity_spec> auto numerical_value_in(U, Policy policy) const noexcept
   {
     return in(U{}, policy).numerical_value_is_an_implementation_detail_;
+  }
+
+  // Not `noexcept`, unlike the overloads above: converting to `ToRep` may throw, as a checked
+  // representation does on overflow.
+  template<RepresentationOf<quantity_spec> ToRep, UnitOf<quantity_spec> U>
+    requires detail::RepConstructibleFrom<ToRep, rep> && detail::ImplicitConversion<unit, rep, U{}, ToRep>
+  [[nodiscard]] constexpr RepresentationOf<quantity_spec> auto numerical_value_in(U) const
+  {
+    return in<ToRep>(U{}).numerical_value_is_an_implementation_detail_;
+  }
+
+  template<RepresentationOf<quantity_spec> ToRep, UnitOf<quantity_spec> U, detail::RoundingPolicy Policy>
+    requires std::constructible_from<ToRep, rep> && detail::ExplicitlyCastable<unit, U{}, ToRep> &&
+             detail::ValidRoundingPolicyFor<Policy, rep, ToRep>
+  [[nodiscard]] constexpr RepresentationOf<quantity_spec> auto numerical_value_in(U, Policy policy) const
+  {
+    return in<ToRep>(U{}, policy).numerical_value_is_an_implementation_detail_;
   }
 
   template<UnitOf<quantity_spec> U>
@@ -1079,7 +1096,7 @@ public:
     return numerical_value_is_an_implementation_detail_;
   }
 
-  template<typename Q_, QuantityLike Q = std::remove_cvref_t<Q_>>
+  template<typename Q_, detail::QuantityLike Q = std::remove_cvref_t<Q_>>
     requires detail::QuantityConstructibleFrom<detail::quantity_like_type<Q>, quantity>
   [[nodiscard]] explicit(quantity_like_traits<Q>::explicit_export ||
                          !std::convertible_to<quantity, detail::quantity_like_type<Q>>) constexpr
@@ -1241,11 +1258,13 @@ template<Reference R, typename Value, typename Rep = representation_canonical_ty
   requires RepresentationOf<Rep, get_quantity_spec(R{})>
 quantity(Value v, R) -> quantity<R{}, Rep>;
 
-template<Reference auto R = one, typename Value, typename Rep = representation_canonical_type_t<Value>>
-  requires RepresentationOf<Rep, get_quantity_spec(R)>
-quantity(Value) -> quantity<R, Rep>;
+// Spelled without the defaulted `Rep`: every `quantity q = other_quantity;` considers this guide, and a
+// default is substituted before the constraint rejects it, which costs 2 constraint checks per declaration.
+template<Reference auto R = one, typename Value>
+  requires RepresentationOf<representation_canonical_type_t<Value>, get_quantity_spec(R)>
+quantity(Value) -> quantity<R, representation_canonical_type_t<Value>>;
 
-template<QuantityLike Q, typename Rep = quantity_like_traits<Q>::rep>
+template<detail::QuantityLike Q, typename Rep = quantity_like_traits<Q>::rep>
 quantity(Q) -> quantity<quantity_like_traits<Q>::reference, Rep>;
 
 MP_UNITS_EXPORT_END
