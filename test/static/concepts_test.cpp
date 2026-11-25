@@ -239,7 +239,7 @@ static_assert(Unit<struct codata::standard_gravity>);
 static_assert(Unit<scaled_unit<mag<10>, struct si::second>>);
 static_assert(Unit<derived_unit<struct si::metre, per<struct si::second>>>);
 static_assert(Unit<struct one>);
-static_assert(Unit<decltype(get_common_unit(si::kilo<si::metre> / si::hour, si::metre / si::second))>);
+static_assert(Unit<decltype(get_common_reference(si::kilo<si::metre> / si::hour, si::metre / si::second))>);
 static_assert(!Unit<named_unit<"?", kind_of<isq::length>>>);
 static_assert(!Unit<named_unit<"?", si::metre / si::second>>);
 static_assert(!Unit<named_unit<"?", si::metre, kind_of<isq::length>>>);
@@ -375,10 +375,10 @@ static_assert(ReferenceOf<decltype(isq::rotation[one]), isq::rotation>);
 static_assert(ReferenceOf<decltype(isq::rotation[one]), dimensionless>);
 static_assert(ReferenceOf<struct si::radian, isq::angular_measure>);
 static_assert(ReferenceOf<struct si::degree, isq::angular_measure>);
-static_assert(ReferenceOf<decltype(get_common_unit(si::degree, si::radian)), isq::angular_measure>);
+static_assert(ReferenceOf<decltype(get_common_reference(si::degree, si::radian)), isq::angular_measure>);
 static_assert(!ReferenceOf<struct si::radian, dimensionless>);
 static_assert(!ReferenceOf<struct si::degree, dimensionless>);
-static_assert(!ReferenceOf<decltype(get_common_unit(si::degree, si::radian)), dimensionless>);
+static_assert(!ReferenceOf<decltype(get_common_reference(si::degree, si::radian)), dimensionless>);
 static_assert(ReferenceOf<decltype(isq::angular_measure[si::radian]), isq::angular_measure>);
 static_assert(ReferenceOf<decltype(isq::angular_measure[si::degree]), isq::angular_measure>);
 static_assert(!ReferenceOf<decltype(isq::angular_measure[si::radian]), dimensionless>);
@@ -423,6 +423,15 @@ static_assert(!RepresentationOf<char32_t, quantity_tensor_order::scalar>);
 static_assert(!RepresentationOf<char, quantity_field::real>);
 static_assert(RepresentationOf<signed char, quantity_tensor_order::scalar>);
 static_assert(RepresentationOf<unsigned char, quantity_tensor_order::scalar>);
+
+// cv-qualified or reference type: not a representation, the unqualified object type is
+static_assert(!RepresentationOf<const int, quantity_tensor_order::scalar>);
+static_assert(!RepresentationOf<volatile int, quantity_tensor_order::scalar>);
+static_assert(!RepresentationOf<const volatile int, quantity_tensor_order::scalar>);
+static_assert(!RepresentationOf<volatile double, quantity_field::real>);
+static_assert(!RepresentationOf<int&, quantity_tensor_order::scalar>);
+static_assert(!RepresentationOf<const int&, quantity_tensor_order::scalar>);
+static_assert(!RepresentationOf<int&&, quantity_tensor_order::scalar>);
 
 // non-numeric type: not a representation at all
 static_assert(!RepresentationOf<std::optional<int>, quantity_tensor_order::scalar>);

@@ -254,7 +254,7 @@ template<typename Common, auto R, typename Rep>
 template<typename Rep, Unit U1, Unit U2>
 [[nodiscard]] consteval bool overflows_non_zero_common_values(U1 u1, U2 u2)
 {
-  constexpr Unit auto cu = mp_units::get_common_unit(U1{}, U2{});
+  constexpr Unit auto cu = mp_units::detail::find_common_unit(U1{}, U2{});
   return scaling_overflows_non_zero_values<Rep>(u1, cu) || scaling_overflows_non_zero_values<Rep>(u2, cu);
 }
 
@@ -782,7 +782,7 @@ public:
   static constexpr Dimension auto dimension = quantity_spec._dimension_;
 #if !MP_UNITS_EAGER_STATIC_MEMBER_INIT_HACK
   // Deprecated in 2.6.0. Ill-formed for a quantity kind, which admits every character. Omitted on MSVC up to
-  // 19.51 (see `MP_UNITS_EAGER_STATIC_MEMBER_INIT_HACK`).
+  // 19.52 (see `MP_UNITS_EAGER_STATIC_MEMBER_INIT_HACK`).
   [[deprecated(
     "2.6.0: a quantity's character is no longer a value to inspect; ask "
     "`QuantityOf<Q, quantity_tensor_order::vector>`, `QuantityOf<Q, quantity_field::complex>`, or "

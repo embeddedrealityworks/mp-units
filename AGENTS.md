@@ -47,6 +47,11 @@ Tests live in two places, and a change usually belongs in one of them:
 - `test/runtime/` — [Catch2](https://github.com/catchorg/Catch2) tests in the
   `unit_tests_runtime` executable, for behavior that only shows up when the code executes.
 
+Compiler Explorer links in the docs are built by `scripts/examples_godbolt.py`, not pasted
+by hand. Use a concrete, newest compiler release there and never `trunk`: a trunk compiler
+is slower on Compiler Explorer, which already times out on some examples. The reasons are
+in that script.
+
 Whenever you touch a public header, verify it is still self-contained:
 
 ```bash
@@ -60,6 +65,16 @@ your own diff, so name the files explicitly rather than sweeping the repository:
 pre-commit run --files <the files you changed>
 # pre-commit run --all-files      # only when you really need a full sweep
 ```
+
+Before the first commit in a clone, check that the git hook is installed. Without it
+nothing stops a commit that fails the hooks, and CI is the first to notice:
+
+```bash
+test -x "$(git rev-parse --git-path hooks/pre-commit)" || echo "hook missing"
+```
+
+If it is missing, say so and ask before running `pre-commit install`, which writes a hook
+into the clone.
 
 ## Understanding the design
 

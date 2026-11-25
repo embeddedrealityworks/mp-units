@@ -8,6 +8,11 @@ This page documents the version history and changes for the **mp-units** library
 
 ### 2.6.0 <small>TBD</small> { id="2.6.0" }
 
+- (!) fix: `RepresentationOf` rejects a cv-qualified type and a reference. A `const`
+      type already failed it, but a `volatile` one was accepted, and every arithmetic
+      operation of the quantity then accessed a volatile object. Read a hardware register
+      into a plain value and convert that value instead. Checking a reference used to be
+      a hard error, and it is now `false`
 - feat: `numerical_value_in<Rep>(unit)` and `numerical_value_in<Rep>(unit, policy)` return
       the numerical value in another representation type, with the rules of
       `in<Rep>(unit)` and `in<Rep>(unit, policy)`, for a quantity and for a point at its
@@ -20,6 +25,8 @@ This page documents the version history and changes for the **mp-units** library
       them. `PointOriginFor` stays as the way to constrain an origin. The deprecation warns
       on GCC 13 and Clang 19 and later, the first compilers to accept `[[deprecated]]` on
       a concept
+- refactor: `get_common_unit` is deprecated, as P3045 no longer proposes it.
+      `get_common_reference` returns the common unit when every argument is a unit
 - fix: `wrap_to_range` and `reflect_in_range` no longer overflow a standard integer
       representation when the length of the range, or the period of the reflection (twice
       that length), exceeds the representation's maximum
@@ -297,6 +304,7 @@ This page documents the version history and changes for the **mp-units** library
       did. Only a non-const type may enter a symbolic expression, so
       `si::kilo_<const metre>` and `derived_unit<const metre, per<second>>` are still
       rejected, and dividing a `const` second by a second still gives `one`
+- (!) refactor: `symbol_text::portable()` deprecated in favor of `basic()`
 - (!) refactor: `character_set` enumerators renamed back to `unicode` and `basic`,
       following SG16 review of [P3045](https://wg21.link/p3045). The enumeration names a
       *character set*, not an encoding, so `utf8` was the wrong name: UTF-8 is one
