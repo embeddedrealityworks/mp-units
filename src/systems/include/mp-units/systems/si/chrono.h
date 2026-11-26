@@ -27,6 +27,7 @@
 #include <mp-units/bits/module_macros.h>
 #include <mp-units/compat_macros.h>
 #include <mp-units/systems/isq/si_quantities.h>
+#include <mp-units/systems/si/non_si.h>
 #include <mp-units/systems/si/prefixes.h>
 #include <mp-units/systems/si/units.h>
 
@@ -104,7 +105,6 @@ struct chrono_point_origin_ final : absolute_point_origin<isq::time> {
  * A quantity point measured from it converts to and from `std::chrono::time_point<C>`:
  *
  * @code{.cpp}
- * // snippet-template: none
  * using timestamp =
  *   quantity_point<isq::time[si::second], chrono_point_origin<std::chrono::system_clock>>;
  *

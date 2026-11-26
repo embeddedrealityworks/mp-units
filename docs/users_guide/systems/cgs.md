@@ -61,9 +61,10 @@ The CGS system defines several derived units with special names, particularly in
 
 
 ```cpp
+// snippet-continues
 namespace mp_units::cgs {
 
-inline constexpr struct gal : named_unit<"Gal", centimetre / square(second)> {} gal;
+using non_si::gal;  // SI Brochure, Table 8
 inline constexpr struct dyne : named_unit<"dyn", gram * centimetre / square(second)> {} dyne;
 inline constexpr struct erg : named_unit<"erg", dyne * centimetre> {} erg;
 inline constexpr struct barye : named_unit<"Ba", gram / (centimetre * square(second))> {} barye;
@@ -79,12 +80,13 @@ inline constexpr struct kayser : named_unit<"K", one / centimetre> {} kayser;
 Convenient unit symbols are provided for common usage:
 
 ```cpp
+// snippet-continues
 namespace mp_units::cgs::unit_symbols {
 
 inline constexpr auto cm = centimetre;
 inline constexpr auto g = gram;
 inline constexpr auto s = second;
-inline constexpr auto Gal = gal;
+using non_si::unit_symbols::Gal;
 inline constexpr auto dyn = dyne;
 inline constexpr auto Ba = barye;
 inline constexpr auto P = poise;
@@ -105,6 +107,7 @@ inline constexpr auto s3 = cubic(second);
 ### Basic Mechanics
 
 ```cpp
+// snippet-template: systems
 using namespace mp_units;
 using namespace mp_units::cgs::unit_symbols;
 
@@ -125,6 +128,7 @@ std::cout << work.in(cgs::erg) << "\n";  // 4900000 erg
 The gal unit is named after Galileo and is commonly used in gravimetry:
 
 ```cpp
+// snippet-template: systems
 using namespace mp_units;
 using namespace mp_units::cgs::unit_symbols;
 
@@ -138,6 +142,7 @@ quantity gravity_anomaly = 50 * si::micro<Gal>;   // 50 μGal
 ### Viscosity Measurements
 
 ```cpp
+// snippet-template: systems
 using namespace mp_units;
 using namespace mp_units::cgs::unit_symbols;
 
@@ -153,6 +158,7 @@ quantity water_kin_viscosity = 0.01 * St;     // Water at 20°C: 0.01 St = 1 cSt
 The kayser (reciprocal centimetre) is used in spectroscopy for wavenumbers:
 
 ```cpp
+// snippet-template: systems_plain
 using namespace mp_units;
 using namespace mp_units::cgs::unit_symbols;
 
@@ -169,6 +175,7 @@ std::cout << wavelength.in(si::nano<si::metre>) << "\n";   // 666.667 nm
 **mp-units** handles conversions automatically:
 
 ```cpp
+// snippet-template: systems
 using namespace mp_units;
 
 // CGS to SI
@@ -189,6 +196,7 @@ quantity pressure_barye = pressure_pascal.in(cgs::barye);  // 1000 Ba
 ### Mixed Calculations
 
 ```cpp
+// snippet-template: systems
 using namespace mp_units;
 using namespace mp_units::si::unit_symbols;
 

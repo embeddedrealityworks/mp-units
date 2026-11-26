@@ -8,6 +8,10 @@ This page documents the version history and changes for the **mp-units** library
 
 ### 2.6.0 <small>TBD</small> { id="2.6.0" }
 
+- feat: `hep::beta_from_gamma()` and `hep::gamma_from_beta()` convert between the Lorentz
+      factor and the relativistic β, a relation that no quantity equation can state
+- feat: `hep::lorentz_factor` is defined as `hep::coordinate_time / hep::proper_time`, so
+      the ratio of the two times converts to it explicitly
 - (!) fix: `RepresentationOf` rejects a cv-qualified type and a reference. A `const`
       type already failed it, but a `volatile` one was accepted, and every arithmetic
       operation of the quantity then accessed a volatile object. Read a hardware register
@@ -25,8 +29,9 @@ This page documents the version history and changes for the **mp-units** library
       them. `PointOriginFor` stays as the way to constrain an origin. The deprecation warns
       on GCC 13 and Clang 19 and later, the first compilers to accept `[[deprecated]]` on
       a concept
-- refactor: `get_common_unit` is deprecated, as P3045 no longer proposes it.
-      `get_common_reference` returns the common unit when every argument is a unit
+- refactor: `get_common_unit`, `get_common_reference`, and `get_common_quantity_spec` are
+      deprecated, as P3045 no longer proposes them. `std::common_type_t` of two
+      quantities names a type that can hold both
 - fix: `wrap_to_range` and `reflect_in_range` no longer overflow a standard integer
       representation when the length of the range, or the period of the reflection (twice
       that length), exceeds the representation's maximum
@@ -100,6 +105,11 @@ This page documents the version history and changes for the **mp-units** library
       underlying type, as P3045 specifies them. The standard makes `std::int8_t` and
       `std::uint8_t` optional, so a standard enumeration can't be built on them. Each now
       has the size of an `int`
+- perf: a measured constant defined with `standard_uncertainty` checks the unit of its
+      uncertainty without computing any canonical unit when the uncertainty is written in
+      the same unit as the value, as every constant in the CODATA headers is. `codata.h`
+      drops 17% of its template instantiations, `codata2022.h` 16%, and
+      `codata2022_essential.h` 10%
 - perf: `+`, `-`, `%`, and the comparisons read an operand that already has the common
       representation type and an equivalent unit by reference rather than copying it. A
       copy isn't free for a vector or a matrix representation (#837)
@@ -131,8 +141,7 @@ This page documents the version history and changes for the **mp-units** library
 - (!) refactor: `char`, `wchar_t`, `char8_t`, `char16_t`, and `char32_t` are not
       representation types, as `bool` isn't. A character type holds a character, not a
       number, so `quantity<si::metre, char>` is ill-formed. `signed char` and `unsigned char`,
-      the types of `std::int8_t` and `std::uint8_t`, stay representation types. A literal
-      zero of a character type, such as `'\0'`, doesn't compare against a quantity either
+      the types of `std::int8_t` and `std::uint8_t`, stay representation types
 - feat: a vector quantity composes from a single value holding its components, the
       inverse of its tuple protocol: `quantity<flight_velocity[km / h], vec3> v =
       std::tuple{fwd, lat, vert};`. Any type a structured binding decomposes through
@@ -669,7 +678,10 @@ This page documents the version history and changes for the **mp-units** library
         selected by appending `~` to its `format-spec` (`23.4782(32)`); `precision` states
         the number of significant digits of the uncertainty (two by default, as published
         by CODATA), and the `value ± σ` form remains the default (#464)
-- feat: comparisons against literal `0`
+- feat: `zero` compares against quantities and `std::chrono::duration`, and initializes
+        them
+- (!) feat: `mp_units::zero` makes an unqualified `zero` of user code ambiguous under
+        `using namespace mp_units`, and a local `zero` triggers `-Wshadow`
 - feat: `hep` system refactored to be similar to leading projects in the HEP domain
 - feat: `hep` system extended with new constants and specialized quantities
 - feat: `unit_for`, `reference_for`, and `rep_for` added
@@ -760,6 +772,13 @@ This page documents the version history and changes for the **mp-units** library
 - (!) refactor: `zeroth_degree_Celsius` deprecated (use `ice_point`)
 - (!) refactor: `zeroth_degree_Fahrenheit` deprecated (use `fahrenheit_zero`)
 - (!) refactor: `zeroth_rankine` deprecated (use `si::absolute_zero`)
+- (!) refactor: `is_eq_zero()` and its family deprecated (compare against `zero`)
+- (!) fix: `representation_values` provides `zero()` and `one()` only for scalars; a vector
+        or tensor type specializes it, as `cartesian_vector`, `cartesian_tensor`, and the
+        fixed-size Eigen, GLM, and Blaze types do
+- fix: `quantity::zero()` returned an uninitialized fixed-size Eigen vector (an assertion
+        failure in a debug build) and an empty dynamic-size Eigen or Blaze vector, and didn't
+        compile for an Eigen matrix; a dynamic-size vector or matrix now has no `zero()`
 - refactor: CGS <-> SI interop improved with using declarations
 - refactor: `isq::time` swapped with `isq::duration`
 - refactor: deprecation warnings now include the release version

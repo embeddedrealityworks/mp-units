@@ -51,6 +51,14 @@ static_assert(unit_symbol(second) == "s");
 static_assert(unit_symbol(joule) == "J");
 static_assert(unit_symbol(degree_Celsius) == "\u00b0C");
 static_assert(unit_symbol<usf{.char_set = basic}>(degree_Celsius) == "`C");
+static_assert(unit_symbol(non_si::angstrom) == "\u00c5");
+static_assert(unit_symbol<usf{.char_set = basic}>(non_si::angstrom) == "angstrom");
+static_assert(unit_symbol(non_si::barn) == "b");
+static_assert(unit_symbol(non_si::gal) == "Gal");
+static_assert(unit_symbol(non_si::dalton) == "Da");
+static_assert(unit_symbol(non_si::nautical_mile) == "nmi");
+static_assert(unit_symbol(non_si::knot) == "kn");
+static_assert(unit_symbol(non_si::var) == "var");
 static_assert(unit_symbol(kilogram) == "kg");
 static_assert(unit_symbol(hour) == "h");
 
@@ -112,6 +120,8 @@ static_assert(unit_symbol(pebi<bit>) == "Pibit");
 static_assert(unit_symbol(exbi<bit>) == "Eibit");
 static_assert(unit_symbol(zebi<bit>) == "Zibit");
 static_assert(unit_symbol(yobi<bit>) == "Yibit");
+static_assert(unit_symbol(robi<bit>) == "Ribit");
+static_assert(unit_symbol(quebi<bit>) == "Qibit");
 
 // scaled units
 static_assert(unit_symbol(mag<100> * metre) == "(100 m)");
@@ -208,13 +218,14 @@ static_assert(unit_symbol(mag<2> / (mag<detail::pi_c> * mag<e>)*one) == "(2 e⁻
 static_assert(unit_symbol<usf{.solidus = always}>(mag<2> / (mag<detail::pi_c> * mag<e>)*one) == "(2/(e π))");
 
 // common units
-static_assert(unit_symbol(get_common_reference(kilo<metre>, mile)) == "[(1/15625 km), (1/25146 mi)]");
-static_assert(unit_symbol(get_common_reference(kilo<metre> / hour, metre / second)) == "[(1/5 km/h), (1/18 m/s)]");
-static_assert(unit_symbol(get_common_reference(kilo<metre> / hour, metre / second) / second) ==
+static_assert(unit_symbol(detail::find_common_reference(kilo<metre>, mile)) == "[(1/15625 km), (1/25146 mi)]");
+static_assert(unit_symbol(detail::find_common_reference(kilo<metre> / hour, metre / second)) ==
+              "[(1/5 km/h), (1/18 m/s)]");
+static_assert(unit_symbol(detail::find_common_reference(kilo<metre> / hour, metre / second) / second) ==
               "[(1/5 km/h), (1/18 m/s)]/s");
-static_assert(unit_symbol(get_common_reference(kilo<metre> / hour, metre / second) * second) ==
+static_assert(unit_symbol(detail::find_common_reference(kilo<metre> / hour, metre / second) * second) ==
               "[(1/5 km/h), (1/18 m/s)] s");
-static_assert(unit_symbol(get_common_reference(radian, degree)) == "[(1/π°), (1/180 rad)]");
+static_assert(unit_symbol(detail::find_common_reference(radian, degree)) == "[(1/π°), (1/180 rad)]");
 
 // derived units
 static_assert(unit_symbol(one) == "");  // NOLINT(readability-container-size-empty)

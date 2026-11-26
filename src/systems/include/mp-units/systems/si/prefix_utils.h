@@ -29,6 +29,7 @@
 
 #ifndef MP_UNITS_IN_MODULE_INTERFACE
 #include <mp-units/framework/scaling.h>
+#include <mp-units/framework/zero.h>
 #if MP_UNITS_HOSTED
 #ifdef MP_UNITS_IMPORT_STD
 import std;
@@ -48,7 +49,6 @@ MP_UNITS_EXPORT_BEGIN
  * Which SI prefixes @ref invoke_with_prefixed may choose
  *
  * @code{.cpp}
- * // snippet-template: none
  * #include <mp-units/systems/si/prefix_utils.h>
  *
  * auto print = [](auto q) { std::cout << q << '\n'; };
@@ -104,7 +104,7 @@ constexpr decltype(auto) invoke_with_prefixed(Func func, Q q, U u, prefix_range 
   // Documented as a minimum digit count and never enforced. At zero or below, `exponent` is shifted
   // up and the function silently picks a different prefix than the one it describes.
   MP_UNITS_PRE_DEFERRED_COMPAT(min_integral_digits >= 1);
-  if (q == 0) return func(q.in(u));
+  if (q == mp_units::zero) return func(q.in(u));
 
   using std::abs, std::log10, std::floor;
 

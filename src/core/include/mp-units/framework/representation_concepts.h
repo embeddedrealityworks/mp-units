@@ -98,7 +98,7 @@ using wider_int_for =
 // matching `std::common_type` specialization - the type author's part of the contract.
 //
 // This is a representation-validity gate only; the quantity operators do NOT consume it. `operator+`
-// materializes results via `common_quantity_for` (`get_common_reference` +
+// materializes results via `common_quantity_for` (`find_common_reference` +
 // `representation_canonical_type_t<invoke_result_t<...>>`), and the comparison operators enforce
 // their own `std::common_type<Rep1, Rep2>` requirement (`CommonlyComparableQuantities`).
 //
@@ -459,7 +459,6 @@ inline namespace cpo {
  * and one call covers every representation of a vector quantity:
  *
  * @code{.cpp}
- * // snippet-template: none
  * #include <mp-units/utility/cartesian_vector.h>
  *
  * double from_vector = mp_units::magnitude(utility::cartesian_vector{3., 4., 0.});  // 5

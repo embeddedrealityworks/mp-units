@@ -354,12 +354,13 @@ constexpr bool is_specialization_of_scaled_unit<scaled_unit<M, U>> = true;
  * For example:
  *
  * @code{.cpp}
- * inline constexpr struct second : named_unit<"s", kind_of<time>> {} second;
- * inline constexpr struct metre : named_unit<"m", kind_of<length> {} metre;
- * inline constexpr struct hertz : named_unit<"Hz", inverse(second), kind_of<frequency>> {} hertz;
+ * // snippet-template: si_excerpt
+ * inline constexpr struct second : named_unit<"s", kind_of<isq::duration>> {} second;
+ * inline constexpr struct metre : named_unit<"m", kind_of<isq::length>> {} metre;
+ * inline constexpr struct hertz : named_unit<"Hz", one / second, kind_of<isq::frequency>> {} hertz;
  * inline constexpr struct newton : named_unit<"N", kilogram * metre / square(second)> {} newton;
- * inline constexpr struct degree_Celsius : named_unit<{u8"°C", "`C"}, kelvin, ice_point> {}
- * degree_Celsius; inline constexpr struct minute : named_unit<"min", mag<60> * second> {} minute;
+ * inline constexpr struct degree_Celsius : named_unit<{u8"°C", "`C"}, kelvin, ice_point> {} degree_Celsius;
+ * inline constexpr struct minute : named_unit<"min", mag<60> * second> {} minute;
  * @endcode
  *
  * @note A common convention in this library is to assign the same name for a type and an object of this type.
@@ -576,6 +577,36 @@ struct named_constant<Symbol, U, RSU> : decltype(U)::_base_type_ {
   static constexpr auto _relative_standard_uncertainty_ = M{};
 };
 
+namespace detail {
+
+// The unit expression with every magnitude dropped. Magnitudes never change the reference unit,
+// so two units that are the same type here are always convertible.
+template<typename U>
+struct unscaled_unit_impl : std::type_identity<U> {};
+
+template<auto M, typename U>
+struct unscaled_unit_impl<scaled_unit<M, U>> : unscaled_unit_impl<U> {};
+
+template<typename... Us>
+struct unscaled_unit_impl<derived_unit<Us...>> :
+    std::type_identity<derived_unit<typename unscaled_unit_impl<Us>::type...>> {};
+
+template<typename... Us>
+struct unscaled_unit_impl<per<Us...>> : std::type_identity<per<typename unscaled_unit_impl<Us>::type...>> {};
+
+template<typename F, int Num, int... Den>
+struct unscaled_unit_impl<power<F, Num, Den...>> :
+    std::type_identity<power<typename unscaled_unit_impl<F>::type, Num, Den...>> {};
+
+// A measured constant checks this before `ConvertibleUnits`. Every constant in the CODATA headers
+// writes its value and its uncertainty in the same unit, and recognizing that without computing two
+// canonical units cuts the instantiations of `codata2022.h` by 16%.
+template<typename U1, typename U2>
+constexpr bool same_unscaled_unit =
+  std::is_same_v<typename unscaled_unit_impl<U1>::type, typename unscaled_unit_impl<U2>::type>;
+
+}  // namespace detail
+
 /**
  * Specialization for a measured constant declaring its absolute standard uncertainty
  *
@@ -588,7 +619,8 @@ struct named_constant<Symbol, U, RSU> : decltype(U)::_base_type_ {
  * @tparam SU the standard uncertainty of the measured value
  */
 template<symbol_text Symbol, Unit auto U, typename SUU, standard_uncertainty<SUU> SU>
-  requires(!Symbol.empty()) && detail::is_positive_canonical_unit_mag<SUU{}> && detail::ConvertibleUnits<SUU{}, U>
+  requires(!Symbol.empty()) && detail::is_positive_canonical_unit_mag<SUU{}> &&
+          (detail::same_unscaled_unit<SUU, MP_UNITS_NONCONST_TYPE(U)> || detail::ConvertibleUnits<SUU{}, U>)
 struct named_constant<Symbol, U, SU> : decltype(U)::_base_type_ {
   using _base_type_ = named_constant;       // exposition only
   static constexpr auto _symbol_ = Symbol;  ///< Unique constant identifier
@@ -648,13 +680,15 @@ MP_UNITS_EXPORT template<MeasuredConstant U>
  * For example:
  *
  * @code{.cpp}
- * template<PrefixableUnit auto U>
- * struct kilo_ : prefixed_unit<"k", mag_power<10, 3>, U> {};
+ * // snippet-template: si_excerpt
+ * template<PrefixableUnit U>
+ *   requires(!std::is_const_v<U>)
+ * struct kilo_ : prefixed_unit<"k", mag_power<10, 3>, U{}> {};
  *
  * template<PrefixableUnit auto U>
- * constexpr kilo_<U> kilo;
+ * constexpr kilo_<decltype(U)> kilo;
  *
- * inline constexpr auto kilogram = si::kilo<gram>;
+ * inline constexpr auto kilogram = kilo<gram>;
  * @endcode
  *
  * @tparam Symbol a prefix text to prepend to a unit symbol
@@ -748,14 +782,15 @@ struct derived_unit_impl : detail::unit_interface, detail::expr_fractions<one, E
  * For example:
  *
  * @code{.cpp}
- * static_assert(is_of_type<inverse(second), derived_unit<one, per<second>>>);
- * static_assert(is_of_type<one / inverse(second), second>);
- * static_assert(is_of_type<one * second, second>);
- * static_assert(is_of_type<metre * metre, derived_unit<power<metre, 2>>>);
- * static_assert(is_of_type<metre * second, derived_unit<metre, second>>);
- * static_assert(is_of_type<metre / second, derived_unit<metre, per<second>>>);
- * static_assert(is_of_type<metre / square(second), derived_unit<metre, per<power<second, 2>>>>);
- * static_assert(is_of_type<watt / joule, derived_unit<watt, per<joule>>>);
+ * // snippet-template: si_excerpt
+ * static_assert(inverse(second) == derived_unit<struct one, per<struct second>>{});
+ * static_assert(one / inverse(second) == second);
+ * static_assert(one * second == second);
+ * static_assert(metre * metre == derived_unit<power<struct metre, 2>>{});
+ * static_assert(metre * second == derived_unit<struct metre, struct second>{});
+ * static_assert(metre / second == derived_unit<struct metre, per<struct second>>{});
+ * static_assert(metre / square(second) == derived_unit<struct metre, per<power<struct second, 2>>>{});
+ * static_assert(watt / joule == derived_unit<struct watt, per<struct joule>>{});
  * @endcode
  *
  * Every unit in the library has its internal canonical representation being the list of exponents of named base units

@@ -55,6 +55,7 @@ Many reasons make UDLs a poor choice for a physical units library:
    V2 framework, the coherent unit of angular momentum was defined as:
 
     ```cpp
+    // snippet-template: none (historical: the pre-V2 UDL definitions quoted as the old design)
     constexpr auto operator"" _q_kg_m2_per_s(unsigned long long l)
     {
       gsl_Expects(std::in_range<std::int64_t>(l));
@@ -84,6 +85,7 @@ struct X {
 ```
 
 ```cpp
+// snippet-continues
 X x;
 x.vec.emplace_back(42);
 ```
@@ -110,6 +112,27 @@ in order to form a quantity.
     providing both a `quantity` and a
     [`PointOrigin`](../users_guide/advanced_topics/concepts.md#PointOrigin)
     to use as a reference point.
+
+
+## Why doesn't `q > 0` compile for a quantity with a unit?
+
+Code written for `double` compares against `0`, and the same spelling would read like the
+formula it implements. However, it puts a number without a unit next to a quantity that has
+one, which the library otherwise allows only for a dimensionless quantity in `one`. It also
+can't be made reliable in generic code:
+
+- A literal `0` stops being a literal once it is passed to a function, so
+  `std::ranges::find(v, 0)` and `std::less<>{}(q, 0)` can't accept it.
+- Every way of accepting only a literal `0` has a cost. A `consteval` check is invisible
+  to a requires-expression, so a constrained template that probes `q == 1` takes the wrong
+  overload. A null pointer constant makes the probe agree, but triggers
+  `-Wzero-as-null-pointer-constant` in user code and rejects `0.0`.
+
+Compare against `zero` instead. It is a tag type, and overload resolution sees it like any
+other argument. It is spelled out, so a reader sees that the unit is omitted on purpose. It
+doesn't convert to an arithmetic type either. When an expression's result isn't a quantity,
+a comparison against `zero` can't end up calling another library's comparison against
+`int`.
 
 
 ## Why can I add newton metres to joules?
@@ -140,7 +163,8 @@ passes a plain `40 * N * m`.
 The kind check fires as soon as both operands name their quantity:
 
 ```cpp
-// auto sum = torque + work;   // Compile-time error: quantities of different kinds
+// snippet-continues
+// auto sum = torque + work;   // ❌ quantities of different kinds
 ```
 
 _Work_ and _moment of force_ have different defining equations and sit in different
@@ -189,8 +213,8 @@ brochure's, and the typed quantities keep the distinctions the units don't:
 
 ```cpp
 quantity<isq::torque[J]> torque = isq::torque(40 * N * m);   // OK
-// auto f = isq::frequency(1 * Bq);                           // Compile-time error: Bq is reserved for activity
-// auto s = isq::torque(40 * N * m) + isq::energy(40 * J);    // Compile-time error: quantities of different kinds
+// auto f = isq::frequency(1 * Bq);                           // ❌ Bq is reserved for activity
+// auto s = isq::torque(40 * N * m) + isq::energy(40 * J);    // ❌ quantities of different kinds
 ```
 
 
@@ -209,7 +233,7 @@ quantity inertia = isq::moment_of_inertia(3.0 * kg * m2);
 
 quantity<isq::angular_momentum[kg * m2 / s]> l1 = omega * inertia;                    // OK
 quantity l2 = quantity<isq::angular_momentum[kg * m2 / s]>(omega * inertia);          // OK
-// Compile-time error: kg * m² * rad / s is no unit of angular momentum
+// ❌ kg * m² * rad / s is no unit of angular momentum
 // quantity l3 = isq::angular_momentum(omega * inertia);
 ```
 
@@ -226,6 +250,7 @@ In the initial design of this library, the resulting type of division of two qua
 their common representation type:
 
 ```cpp
+// snippet-template: none (historical: the initial design in which km / km yielded int)
 static_assert(std::is_same_v<decltype(10 * km / (5 * km)), int>);
 ```
 
@@ -302,6 +327,7 @@ inline constexpr auto kWh = kilowatt_hour;
 With the above, we can refactor the above code to:
 
 ```cpp
+// snippet-continues
 std::println("{}", 42 * kWh);
 std::println("{}", (42 * kW * h).in(kWh));
 ```
@@ -316,6 +342,7 @@ Both lines will produce an expected "42 kWh" unit in the output.
     new derived unit:
 
     ```cpp
+    // snippet-continues
     std::println("{}", (42 * kWh / (2 * h)).in(kW));
     ```
 
@@ -409,7 +436,7 @@ representation:
 
 ```cpp
 double d = 5.0;
-quantity& q = reinterpret_cast<quantity<si::metre, double>&>(d);  // undefined behavior
+quantity<si::metre, double>& q = reinterpret_cast<quantity<si::metre, double>&>(d);  // undefined behavior
 ```
 
 This is undefined behavior. The object at that address has dynamic type `double`,
@@ -450,7 +477,7 @@ On an embedded target a measurement often arrives in a memory-mapped hardware re
 declared `volatile`. You might want to use the register's type as the representation:
 
 ```cpp
-quantity<si::volt, volatile std::uint16_t> reading;  // does not compile
+quantity<si::volt, volatile std::uint16_t> reading;  // ❌ a cv-qualified representation
 ```
 
 A `quantity` holds its own copy of the numerical value, so `reading` would never touch
@@ -467,6 +494,7 @@ To get a constant quantity, declare the quantity itself `const`.
 Read the register once into a plain value, then convert that value:
 
 ```cpp
+// snippet-after: example/hw_voltage.cpp:decls
 volatile std::uint16_t hw_voltage_value;  // stands in for a hardware register
 
 std::uint16_t local_copy = hw_voltage_value;  // one volatile read
@@ -483,7 +511,7 @@ Following a unit equation through the docs, you might try to spell the resulting
 directly:
 
 ```cpp
-derived_unit<si::metre, per<si::second>> speed_unit;   // does not compile
+derived_unit<si::metre, per<si::second>> speed_unit;   // ❌
 ```
 
 This fails because `derived_unit` and `per` both take *types* as their template arguments,

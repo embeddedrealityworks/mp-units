@@ -24,8 +24,13 @@
 #ifdef MP_UNITS_IMPORT_STD
 import std;
 #else
+#include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <functional>
+#include <limits>
 #include <numbers>
+#include <vector>
 #endif
 #ifdef MP_UNITS_MODULES
 import mp_units;
@@ -71,7 +76,8 @@ TEST_CASE("quantity operations", "[quantity]")
   // Reproducing issue #474 exactly:
   SECTION("Issue 474 is fixed")
   {
-    constexpr auto val_issue_474 = 8.0 * si::si2019::boltzmann_constant * 1000.0 * K / (std::numbers::pi * 10 * Da);
+    constexpr auto val_issue_474 =
+      8.0 * si::si2019::boltzmann_constant * 1000.0 * K / (std::numbers::pi * 10 * non_si::unit_symbols::Da);
     REQUIRE(within_4_ulps(sqrt(val_issue_474).numerical_value_in(m / s),
                           std::sqrt(val_issue_474.numerical_value_in(m * m / s / s))));
   }
@@ -81,4 +87,44 @@ TEST_CASE("quantity operations", "[quantity]")
     volatile std::int16_t vint = 123;
     REQUIRE(quantity(vint * m).numerical_value_in(m) == 123);
   }
+}
+
+TEST_CASE("zero survives being passed to a function", "[quantity][zero]")
+{
+  // a literal `0` stops being a compile-time zero inside the algorithm, while `zero` carries its
+  // value in its type, so these work outside constant evaluation
+  std::vector<quantity<si::metre, int>> v = {3 * m, 0 * m, -2 * m, 0 * m};
+  quantity<si::metre, int> q = v.back();
+
+  CHECK(std::find(v.begin(), v.end(), zero) - v.begin() == 1);
+  CHECK(std::count(v.begin(), v.end(), zero) == 2);
+  CHECK(std::ranges::find(v, zero) - v.begin() == 1);
+  CHECK(std::ranges::count(v, zero) == 2);
+  CHECK(std::count_if(v.begin(), v.end(), [](const auto& len) { return len < zero; }) == 1);
+  CHECK_FALSE(std::less<>{}(q, zero));
+  CHECK(std::ranges::less{}(v[2], zero));
+  CHECK(std::ranges::equal_to{}(q, zero));
+
+  q = 5 * m;
+  q = zero;
+  CHECK(q == 0 * m);
+}
+
+TEST_CASE("a NaN is unordered against zero", "[zero][nan]")
+{
+  // as against `0.`: every ordering of a NaN is false, including the ones that would be the
+  // negation of each other
+  const quantity not_a_number = std::numeric_limits<double>::quiet_NaN() * m;
+  CHECK_FALSE(not_a_number < zero);
+  CHECK_FALSE(not_a_number >= zero);
+  CHECK_FALSE(std::is_eq(not_a_number <=> zero));
+  CHECK(not_a_number != zero);
+}
+
+TEST_CASE("zero survives being passed to a function for durations", "[zero]")
+{
+  std::vector<std::chrono::seconds> durations = {std::chrono::seconds{3}, std::chrono::seconds{0}};
+  CHECK(std::ranges::find(durations, zero) - durations.begin() == 1);
+  CHECK(std::ranges::count(durations, zero) == 1);
+  CHECK_FALSE(std::ranges::less{}(durations.front(), zero));
 }

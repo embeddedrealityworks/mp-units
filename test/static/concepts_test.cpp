@@ -239,7 +239,7 @@ static_assert(Unit<struct codata::standard_gravity>);
 static_assert(Unit<scaled_unit<mag<10>, struct si::second>>);
 static_assert(Unit<derived_unit<struct si::metre, per<struct si::second>>>);
 static_assert(Unit<struct one>);
-static_assert(Unit<decltype(get_common_reference(si::kilo<si::metre> / si::hour, si::metre / si::second))>);
+static_assert(Unit<decltype(detail::find_common_reference(si::kilo<si::metre> / si::hour, si::metre / si::second))>);
 static_assert(!Unit<named_unit<"?", kind_of<isq::length>>>);
 static_assert(!Unit<named_unit<"?", si::metre / si::second>>);
 static_assert(!Unit<named_unit<"?", si::metre, kind_of<isq::length>>>);
@@ -375,10 +375,10 @@ static_assert(ReferenceOf<decltype(isq::rotation[one]), isq::rotation>);
 static_assert(ReferenceOf<decltype(isq::rotation[one]), dimensionless>);
 static_assert(ReferenceOf<struct si::radian, isq::angular_measure>);
 static_assert(ReferenceOf<struct si::degree, isq::angular_measure>);
-static_assert(ReferenceOf<decltype(get_common_reference(si::degree, si::radian)), isq::angular_measure>);
+static_assert(ReferenceOf<decltype(detail::find_common_reference(si::degree, si::radian)), isq::angular_measure>);
 static_assert(!ReferenceOf<struct si::radian, dimensionless>);
 static_assert(!ReferenceOf<struct si::degree, dimensionless>);
-static_assert(!ReferenceOf<decltype(get_common_reference(si::degree, si::radian)), dimensionless>);
+static_assert(!ReferenceOf<decltype(detail::find_common_reference(si::degree, si::radian)), dimensionless>);
 static_assert(ReferenceOf<decltype(isq::angular_measure[si::radian]), isq::angular_measure>);
 static_assert(ReferenceOf<decltype(isq::angular_measure[si::degree]), isq::angular_measure>);
 static_assert(!ReferenceOf<decltype(isq::angular_measure[si::radian]), dimensionless>);
@@ -1105,6 +1105,8 @@ concept valid_symbolic_terms = requires {
   typename iec::exbi_<U>;
   typename iec::zebi_<U>;
   typename iec::yobi_<U>;
+  typename iec::robi_<U>;
+  typename iec::quebi_<U>;
 };
 static_assert(
   valid_symbolic_terms<struct si::metre, struct isq::length, struct isq::dim_length,
@@ -1163,6 +1165,8 @@ concept invalid_symbolic_terms = requires {
   requires !requires { typename iec::exbi_<U>; };
   requires !requires { typename iec::zebi_<U>; };
   requires !requires { typename iec::yobi_<U>; };
+  requires !requires { typename iec::robi_<U>; };
+  requires !requires { typename iec::quebi_<U>; };
 };
 static_assert(invalid_symbolic_terms<decltype(si::metre), decltype(isq::length), decltype(isq::dim_length),
                                      decltype(length_in_metres), decltype(mag<10>)>);

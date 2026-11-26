@@ -174,7 +174,7 @@ using representation_underlying_type_t = typename representation_underlying_type
  * expression to the matrix it evaluates to:
  *
  * @code{.cpp}
- * // snippet-template: none
+ * // snippet-template: none (third-party: specializes for Eigen types, which the check does not have)
  * template<typename T>
  *   requires requires { typename T::PlainObject; } && std::derived_from<T, Eigen::EigenBase<T>>
  * struct mp_units::representation_canonical_type<T> {
@@ -185,7 +185,7 @@ using representation_underlying_type_t = typename representation_underlying_type
  * With it, arithmetic on quantities of Eigen vectors gives a quantity of a vector:
  *
  * @code{.cpp}
- * // snippet-template: none
+ * // snippet-template: none (third-party: needs Eigen, which the check does not have)
  * quantity start = isq::displacement(Eigen::Vector3d{1., 2., 3.} * m);
  * quantity offset = isq::displacement(Eigen::Vector3d{4., 5., 6.} * m);
  * quantity end = start + offset;  // stores an Eigen::Vector3d, where Eigen's own sum is a lazy expression
@@ -227,7 +227,7 @@ struct representation_canonical_type<T&&> : representation_canonical_type<T> {};
  * is how the Eigen integration maps every Eigen expression to the matrix it evaluates to:
  *
  * @code{.cpp}
- * // snippet-template: none
+ * // snippet-template: none (third-party: specializes for Eigen types, which the check does not have)
  * template<typename T>
  *   requires requires { typename T::PlainObject; } && std::derived_from<T, Eigen::EigenBase<T>>
  * struct mp_units::representation_canonical_type<T> {
@@ -238,7 +238,7 @@ struct representation_canonical_type<T&&> : representation_canonical_type<T> {};
  * With it, arithmetic on quantities of Eigen vectors gives a quantity of a vector:
  *
  * @code{.cpp}
- * // snippet-template: none
+ * // snippet-template: none (third-party: needs Eigen, which the check does not have)
  * quantity start = isq::displacement(Eigen::Vector3d{1., 2., 3.} * m);
  * quantity offset = isq::displacement(Eigen::Vector3d{4., 5., 6.} * m);
  * quantity end = start + offset;  // stores an Eigen::Vector3d, where Eigen's own sum is a lazy expression
@@ -338,7 +338,7 @@ concept has_ambiguous_order = has_vector_indexing<T> && has_matrix_indexing<T>;
  * tell a vector from a matrix, so a specialization for such a type reads them:
  *
  * @code{.cpp}
- * // snippet-template: none
+ * // snippet-template: none (third-party: specializes for Eigen types, which the check does not have)
  * // an Eigen column vector is an N×1 matrix, which provides both `v[i]` and `v(i, j)`
  * template<typename T>
  *   requires requires { typename T::PlainObject; } && std::derived_from<T, Eigen::EigenBase<T>>
@@ -679,12 +679,31 @@ template<typename Rep>
 [[deprecated("2.5.0: `is_tensor` is no longer necessary and can simply be removed")]]
 constexpr bool is_tensor = false;
 
+namespace detail {
+
+// A scalar gets a default zero and one, while a vector or a tensor doesn't: for Eigen, `Rep(0)` is
+// an empty vector of a dynamic size, and an uninitialized one of a fixed size (or an assertion
+// failure in a debug build), and `Rep(1)` is `(1, 0, 0)` for a `cartesian_vector`. A vector or
+// tensor type that has a zero specializes `representation_values` to provide it.
+template<typename Rep>
+concept scalar_order = utility::specified<decltype(tensor_order<Rep>)> && (tensor_order<Rep> == 0);
+
+// A scalar whose zero and one are `Rep(0)` and `Rep(1)`
+template<typename Rep>
+concept scalar_values = std::constructible_from<Rep, int> && scalar_order<Rep>;
+
+}  // namespace detail
+
 /**
  * A type trait that defines zero, one, min, and max for a representation type
  *
  * The zero, one, min, and max member functions in mp_units::quantity forward their work to
  * these methods. This type can be specialized if the representation Rep requires a specific
  * implementation to return these quantity objects.
+ *
+ * The primary template provides `zero()` and `one()` only for a scalar type constructible from
+ * `int`. A vector or a tensor type specializes it to provide `zero()`, which is what a quantity
+ * of it, and @ref zero, compare against.
  *
  * @tparam Rep a representation type for which a type trait is defined
  */
@@ -693,12 +712,6 @@ template<typename Rep>
 struct representation_values : std::chrono::duration_values<Rep> {
 #else
 struct representation_values {
-  static constexpr Rep zero() noexcept
-    requires std::constructible_from<Rep, int>
-  {
-    return Rep(0);
-  }
-
   static constexpr Rep min() noexcept
     requires std::numeric_limits<Rep>::is_specialized && requires {
       { std::numeric_limits<Rep>::lowest() } -> std::same_as<Rep>;
@@ -716,8 +729,25 @@ struct representation_values {
   }
 #endif
 
+  // Hides the unconstrained `zero()` of `std::chrono::duration_values` in a hosted build for a
+  // vector or a tensor, but returns its value for any scalar, so a scalar type customized for
+  // `std::chrono` keeps its zero.
+  static constexpr Rep zero() noexcept
+#if MP_UNITS_HOSTED
+    requires detail::scalar_order<Rep>
+#else
+    requires detail::scalar_values<Rep>
+#endif
+  {
+#if MP_UNITS_HOSTED
+    return std::chrono::duration_values<Rep>::zero();
+#else
+    return Rep(0);
+#endif
+  }
+
   static constexpr Rep one() noexcept
-    requires std::constructible_from<Rep, int>
+    requires detail::scalar_values<Rep>
   {
     return Rep(1);
   }
@@ -800,9 +830,10 @@ struct quantity_point_like_traits;
  * quantity specs in coordinate order (see @c mp-units/framework/vector_components.h):
  *
  * @code
+ * // snippet-after: docs/how_to_guides/advanced_usage/decompose_vector_quantity.md#axes
  * template<>
  * struct mp_units::component_vectors<flight_velocity> :
- *     mp_units::vector_axes<forward_velocity, wind_drift, sink_rate> {};
+ *     mp_units::vector_axes<forward_velocity, lateral_velocity, vertical_velocity> {};
  * @endcode
  *
  * The name follows ISO 80000-2, which calls the vectors a1e1, a2e2, and a3e3 the component vectors

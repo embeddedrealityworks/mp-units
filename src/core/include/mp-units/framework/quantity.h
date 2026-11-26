@@ -42,6 +42,7 @@
 #include <mp-units/framework/unit_concepts.h>
 #include <mp-units/framework/value_cast.h>
 #include <mp-units/framework/vector_components.h>
+#include <mp-units/framework/zero.h>
 #if MP_UNITS_HOSTED
 #include <mp-units/bits/ostream.h>
 #include <mp-units/utility/format.h>
@@ -63,7 +64,6 @@ import std;
 #if !MP_UNITS_USE_FMTLIB
 #include <locale>  // for `vformat_to` in the width path of the quantity formatter
 #endif
-#include <stdexcept>
 #endif
 #endif
 #endif
@@ -87,16 +87,6 @@ import std;
 namespace mp_units {
 
 namespace detail {
-
-// A literal `0` of an arithmetic type that is a valid representation, so neither `false` nor `'\0'`.
-struct zero {
-  template<typename T>
-    requires std::is_arithmetic_v<T> && (!disable_representation<T>)
-  consteval explicit(false) zero(T val)
-  {
-    if (val != T{0}) MP_UNITS_THROW(std::logic_error("not zero"));
-  }
-};
 
 
 template<typename T, typename Arg>
@@ -155,8 +145,8 @@ template<typename Q>
 concept ImplicitFromNumberQuantity = Quantity<Q> && ImplicitFromNumber<Q::reference>;
 
 // The number operand of `+`, `-` and `%`. The comparisons keep the bare `ImplicitFromNumber`, because
-// `q == 0` on a dimensioned quantity is valid and evaluates it to false on the way to the `zero`
-// overload, so a sentence there would be a wrong diagnosis.
+// concepts such as `std::equality_comparable_with<quantity, int>` probe them with valid code, so a
+// sentence there would be a wrong diagnosis.
 template<auto R>
 concept ImplicitFromNumberOperand =
   ImplicitFromNumber<R> ||
@@ -215,7 +205,7 @@ template<Reference auto R, typename Res>
 
 // Quantities whose specifications have a common one, which is what adding, subtracting and comparing
 // them needs. Asked before the common reference is formed, so that `length + time` is reported in these
-// words rather than as an invalid call to `get_common_reference`. Only the two-quantity overloads of
+// words rather than as an invalid call to `find_common_reference`. Only the two-quantity overloads of
 // the operators and `hypot` evaluate it, and only with operands that are the mistake, so the sentence
 // is not gated.
 template<auto QS1, auto QS2>
@@ -229,11 +219,11 @@ concept QuantitiesOfTheSameKind =
   Quantity<Q1> && Quantity<Q2> && QuantitySpecsOfTheSameKind<Q1::quantity_spec, Q2::quantity_spec>;
 
 template<auto R1, auto R2>
-concept HaveCommonReference = requires { mp_units::get_common_reference(R1, R2); };
+concept HaveCommonReference = requires { mp_units::detail::find_common_reference(R1, R2); };
 
 template<typename Func, Quantity Q1, Quantity Q2>
 using common_quantity_for =
-  quantity<mp_units::get_common_reference(Q1::reference, Q2::reference),
+  quantity<mp_units::detail::find_common_reference(Q1::reference, Q2::reference),
            representation_canonical_type_t<std::invoke_result_t<Func, typename Q1::rep, typename Q2::rep>>>;
 
 // Brings an operand of a binary operation to the operation's common quantity type `Common`. An operand
@@ -264,7 +254,8 @@ template<typename Rep, Unit U1, Unit U2>
 template<typename Func, typename Q1, typename Q2>
 concept CommonlyInvocableQuantities =
   QuantitiesOfTheSameKind<Q1, Q2> && HaveCommonReference<Q1::reference, Q2::reference> &&
-  InvocableQuantities<Func, Q1, Q2, mp_units::get_common_quantity_spec(Q1::quantity_spec, Q2::quantity_spec)> &&
+  InvocableQuantities<Func, Q1, Q2,
+                      mp_units::detail::find_common_quantity_spec(Q1::quantity_spec, Q2::quantity_spec)> &&
   std::convertible_to<Q1, common_quantity_for<Func, Q1, Q2>> &&
   std::convertible_to<Q2, common_quantity_for<Func, Q1, Q2>> &&
   !overflows_non_zero_common_values<
@@ -472,7 +463,7 @@ struct quantity_iface {
             CommonlyInvocableQuantities<std::modulus<>, quantity<R1, Rep1>, quantity<R2, Rep2>>
   [[nodiscard]] friend constexpr Quantity auto operator%(const quantity<R1, Rep1>& lhs, const quantity<R2, Rep2>& rhs)
   {
-    MP_UNITS_PRECONDITION_DEBUG(rhs != 0);
+    MP_UNITS_PRECONDITION_DEBUG(rhs != mp_units::zero);
     using ret = common_quantity_for<std::modulus<>, quantity<R1, Rep1>, quantity<R2, Rep2>>;
     const auto& ret_lhs = to_common_quantity<ret>(lhs);
     const auto& ret_rhs = to_common_quantity<ret>(rhs);
@@ -529,7 +520,7 @@ struct quantity_iface {
     requires InvocableQuantities<std::divides<>, quantity<R1, Rep1>, quantity<R2, Rep2>>
   [[nodiscard]] friend constexpr Quantity auto operator/(const quantity<R1, Rep1>& lhs, const quantity<R2, Rep2>& rhs)
   {
-    MP_UNITS_PRECONDITION_DEBUG(rhs != 0);
+    MP_UNITS_PRECONDITION_DEBUG(rhs != mp_units::zero);
     return quantity{lhs.numerical_value_ref_in(get_unit(R1)) / rhs.numerical_value_ref_in(get_unit(R2)), R1 / R2};
   }
 
@@ -548,7 +539,7 @@ struct quantity_iface {
             ScalableResultOf<get_quantity_spec(one / R1), std::divides<>, const Value&, Rep1>
   [[nodiscard]] friend constexpr Quantity auto operator/(const Value& val, const quantity<R1, Rep1>& q)
   {
-    MP_UNITS_PRECONDITION_DEBUG(q != 0);
+    MP_UNITS_PRECONDITION_DEBUG(q != mp_units::zero);
     return quantity{
       val / q.numerical_value_ref_in(get_unit(R1)),
       scaled_reference<one / R1,
@@ -571,13 +562,6 @@ struct quantity_iface {
     return lhs.numerical_value_ref_in(get_unit(R1)) == rhs;
   }
 
-  template<auto R1, typename Rep1>
-    requires std::equality_comparable<Rep1> && requires { representation_values<Rep1>::zero(); }
-  [[nodiscard]] friend constexpr bool operator==(const quantity<R1, Rep1>& lhs, zero)
-  {
-    return lhs.numerical_value_ref_in(get_unit(R1)) == representation_values<Rep1>::zero();
-  }
-
   // operator<=>
   template<auto R1, typename Rep1, auto R2, typename Rep2>
     requires CommonlyComparableQuantities<quantity<R1, Rep1>, quantity<R2, Rep2>> &&
@@ -592,13 +576,6 @@ struct quantity_iface {
   [[nodiscard]] friend constexpr auto operator<=>(const quantity<R1, Rep1>& lhs, const Value& rhs)
   {
     return lhs.numerical_value_ref_in(get_unit(R1)) <=> rhs;
-  }
-
-  template<auto R1, typename Rep1>
-    requires std::three_way_comparable<Rep1> && requires { representation_values<Rep1>::zero(); }
-  [[nodiscard]] friend constexpr auto operator<=>(const quantity<R1, Rep1>& lhs, zero)
-  {
-    return lhs.numerical_value_ref_in(get_unit(R1)) <=> representation_values<Rep1>::zero();
   }
 
   // tuple-like decomposition of a vector quantity into 1D-vector components (see
@@ -1197,7 +1174,7 @@ public:
             }
   constexpr quantity& operator%=(const quantity<R2, Rep2>& other) &
   {
-    MP_UNITS_PRECONDITION_DEBUG(other != 0);
+    MP_UNITS_PRECONDITION_DEBUG(other != mp_units::zero);
     if constexpr (equivalent(unit, get_unit(R2)))
       numerical_value_is_an_implementation_detail_ %= other.numerical_value_is_an_implementation_detail_;
     else
@@ -1303,15 +1280,16 @@ struct std::tuple_element<Idx, mp_units::quantity<R, Rep>> {
 
 template<auto R1, typename Rep1, auto R2, typename Rep2>
   requires requires {
-    { mp_units::get_common_reference(R1, R2) } -> mp_units::Reference;
+    { mp_units::detail::find_common_reference(R1, R2) } -> mp_units::Reference;
     typename std::common_type_t<Rep1, Rep2>;
     requires(
       !mp_units::detail::overflows_non_zero_common_values<std::common_type_t<Rep1, Rep2>>(get_unit(R1), get_unit(R2)));
-    requires mp_units::RepresentationOf<
-      std::common_type_t<Rep1, Rep2>, mp_units::get_common_quantity_spec(get_quantity_spec(R1), get_quantity_spec(R2))>;
+    requires mp_units::RepresentationOf<std::common_type_t<Rep1, Rep2>,
+                                        mp_units::detail::find_common_quantity_spec(get_quantity_spec(R1),
+                                                                                    get_quantity_spec(R2))>;
   }
 struct std::common_type<mp_units::quantity<R1, Rep1>, mp_units::quantity<R2, Rep2>> :
-    mp_units::detail::common_quantity_type<mp_units::get_common_reference(R1, R2), Rep1, Rep2> {};
+    mp_units::detail::common_quantity_type<mp_units::detail::find_common_reference(R1, R2), Rep1, Rep2> {};
 
 template<auto R, typename Rep, mp_units::RepresentationOf<get_quantity_spec(R)> Value>
   requires(get_unit(R) == mp_units::one) && requires { typename mp_units::quantity<R, std::common_type_t<Rep, Value>>; }

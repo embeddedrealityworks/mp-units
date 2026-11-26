@@ -67,6 +67,17 @@ repos:
         language: system
         pass_filenames: false
         files: ^(docs/.*\.md|example/.*|src/.*\.h|scripts/docs_index\.py)$
+      - id: doc-snippets
+        name: documentation samples compile
+        description: compile every C++ sample in the docs pages and doc comments, reusing each result whose inputs didn't change
+        entry: python3 scripts/check_doc_snippets.py --hook
+        language: system
+        # A header change can break a sample on any page, so every sample is checked. The cache
+        # recompiles only those whose inputs changed.
+        files: ^(docs/.*\.md|example/.*|src/.*\.h|scripts/check_doc_snippets\.py|scripts/snippet_templates/.*)$
+        pass_filenames: false
+        # shows the warning printed when GCC 15 isn't installed, which a passing hook would hide
+        verbose: true
   - repo: https://github.com/DavidAnson/markdownlint-cli2
     rev: v0.22.1
     hooks:

@@ -58,7 +58,12 @@ echo ""
 
 if [[ $1 != "install" ]]; then
   echo "🧹 Running pre-commit checks..."
-  pre-commit run --all-files
+  # SKIP leaves out the hook that compiles the documentation samples. The step below runs
+  # that check over every page itself, so its summary is printed on its own.
+  SKIP=doc-snippets pre-commit run --all-files
+  echo ""
+  echo "📚 Compiling every C++ sample in the documentation..."
+  python3 scripts/check_doc_snippets.py
   echo ""
 fi
 
@@ -77,7 +82,7 @@ set +x
 # (e.g. the devcontainer image lags behind the compiler matrix)
 if conan profile show -pr gcc16 > /dev/null 2>&1; then
   set -x
-  conan "$1" . -pr gcc16   -c user.mp-units.build:all=True -c 'tools.build:cxxflags=["-freflection"]' -o '&:cxx_modules=False' -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=std'      -s compiler.cppstd=26 -b "$build_policy"
+  conan "$1" . -pr gcc16   -c user.mp-units.build:all=True -o '&:cxx_modules=False' -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=std'      -s compiler.cppstd=26 -b "$build_policy"
   set +x
 else
   echo "⚠️  Skipping gcc16: Conan profile not found in this environment"
@@ -91,8 +96,7 @@ conan "$1" . -pr clang18 -c user.mp-units.build:all=True -o '&:cxx_modules=True'
 # clang-19 will never compile mp-units due to https://github.com/llvm/llvm-project/pull/118288
 conan "$1" . -pr clang20 -c user.mp-units.build:all=True -o '&:cxx_modules=True'  -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=none'     -s compiler.cppstd=26 -b "$build_policy"
 conan "$1" . -pr clang21 -c user.mp-units.build:all=True -o '&:cxx_modules=True'  -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=none'     -s compiler.cppstd=26 -b "$build_policy"
-# clang-22 doesn't compile mp-units. Re-enable it once a fixed release ships.
-# conan "$1" . -pr clang22 -c user.mp-units.build:all=True -o '&:cxx_modules=True'  -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=none'     -s compiler.cppstd=26 -b "$build_policy"
+# clang-22 doesn't compile mp-units either, so the image does not install it
 conan "$1" . -pr clang23 -c user.mp-units.build:all=True -o '&:cxx_modules=True'  -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=none'     -s compiler.cppstd=26 -b "$build_policy"
 set +x
 
@@ -107,7 +111,7 @@ if [[ $run_debug ]]; then
   set +x
   if conan profile show -pr gcc16 > /dev/null 2>&1; then
     set -x
-    conan "$1" . -pr gcc16   -c user.mp-units.build:all=True -c 'tools.build:cxxflags=["-freflection"]' -o '&:cxx_modules=False' -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=std'      -s compiler.cppstd=26 -b "$build_policy" -s build_type=Debug
+    conan "$1" . -pr gcc16   -c user.mp-units.build:all=True -o '&:cxx_modules=False' -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=std'      -s compiler.cppstd=26 -b "$build_policy" -s build_type=Debug
     set +x
   else
     echo "⚠️  Skipping gcc16: Conan profile not found in this environment"
@@ -121,8 +125,7 @@ if [[ $run_debug ]]; then
   # clang-19 will never compile mp-units due to https://github.com/llvm/llvm-project/pull/118288
   conan "$1" . -pr clang20 -c user.mp-units.build:all=True -o '&:cxx_modules=True'  -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=none'     -s compiler.cppstd=26 -b "$build_policy" -s build_type=Debug
   conan "$1" . -pr clang21 -c user.mp-units.build:all=True -o '&:cxx_modules=True'  -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=none'     -s compiler.cppstd=26 -b "$build_policy" -s build_type=Debug
-  # clang-22 doesn't compile mp-units. Re-enable it once a fixed release ships.
-  # conan "$1" . -pr clang22 -c user.mp-units.build:all=True -o '&:cxx_modules=True'  -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=none'     -s compiler.cppstd=26 -b "$build_policy" -s build_type=Debug
+  # clang-22 doesn't compile mp-units either, so the image does not install it
   conan "$1" . -pr clang23 -c user.mp-units.build:all=True -o '&:cxx_modules=True'  -o '&:import_std=True'  -o '&:std_format=True'  -o '&:contracts=none'     -s compiler.cppstd=26 -b "$build_policy" -s build_type=Debug
   set +x
   echo "✅ Debug builds completed!"

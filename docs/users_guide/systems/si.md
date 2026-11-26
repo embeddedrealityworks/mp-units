@@ -42,6 +42,7 @@ The SI defines seven base units, one for each ISQ base quantity. The SI Brochure
 The seven base units are defined in **mp-units** as:
 
 ```cpp
+// snippet-template: scoped
 namespace mp_units::si {
 
 inline constexpr struct second : named_unit<"s", kind_of<isq::duration>> {} second;
@@ -87,6 +88,7 @@ The SI Brochure defines:
 The SI provides special names for 22 coherent derived units. Here are some examples:
 
 ```cpp
+// snippet-continues
 namespace mp_units::si {
 
 // Geometry
@@ -103,7 +105,7 @@ inline constexpr struct watt : named_unit<"W", joule / second> {} watt;
 inline constexpr struct coulomb : named_unit<"C", ampere * second> {} coulomb;
 inline constexpr struct volt : named_unit<"V", watt / ampere> {} volt;
 inline constexpr struct farad : named_unit<"F", coulomb / volt> {} farad;
-inline constexpr struct ohm : named_unit<symbol_text{u8"Ω", "ohm"}, volt / ampere> {} ohm;
+inline constexpr struct ohm : named_unit<{u8"Ω", "ohm"}, volt / ampere> {} ohm;
 inline constexpr struct siemens : named_unit<"S", one / ohm> {} siemens;
 inline constexpr struct weber : named_unit<"Wb", volt * second> {} weber;
 inline constexpr struct tesla : named_unit<"T", weber / square(metre)> {} tesla;
@@ -162,6 +164,7 @@ The SI defines prefixes that can be applied to any unit (except kilogram, where 
 to gram) to create scaled versions:
 
 ```cpp
+// snippet-template: scoped
 namespace mp_units::si {
 
 template<PrefixableUnit U> requires(!std::is_const_v<U>) struct quecto_ : prefixed_unit<"q", mag_power<10, -30>, U{}> {};
@@ -172,7 +175,7 @@ template<PrefixableUnit U> requires(!std::is_const_v<U>) struct atto_   : prefix
 template<PrefixableUnit U> requires(!std::is_const_v<U>) struct femto_  : prefixed_unit<"f", mag_power<10, -15>, U{}> {};
 template<PrefixableUnit U> requires(!std::is_const_v<U>) struct pico_   : prefixed_unit<"p", mag_power<10, -12>, U{}> {};
 template<PrefixableUnit U> requires(!std::is_const_v<U>) struct nano_   : prefixed_unit<"n", mag_power<10, -9>, U{}> {};
-template<PrefixableUnit U> requires(!std::is_const_v<U>) struct micro_  : prefixed_unit<symbol_text{u8"µ", "u"}, mag_power<10, -6>, U{}> {};
+template<PrefixableUnit U> requires(!std::is_const_v<U>) struct micro_  : prefixed_unit<{u8"µ", "u"}, mag_power<10, -6>, U{}> {};
 template<PrefixableUnit U> requires(!std::is_const_v<U>) struct milli_  : prefixed_unit<"m", mag_power<10, -3>, U{}> {};
 template<PrefixableUnit U> requires(!std::is_const_v<U>) struct centi_  : prefixed_unit<"c", mag_power<10, -2>, U{}> {};
 template<PrefixableUnit U> requires(!std::is_const_v<U>) struct deci_   : prefixed_unit<"d", mag_power<10, -1>, U{}> {};
@@ -215,48 +218,53 @@ using namespace mp_units::si::unit_symbols;
 
 quantity length = 5 * km;  // 5 km
 quantity mass = 500 * mg;  // 500 mg
-quantity time = 3 * μs;    // 3 μs
+quantity time = 3 * µs;    // 3 μs
 ```
 
 
-## Non-SI Units Accepted for Use with SI
+## Non-SI Units
 
-The SI also accepts certain non-SI units for use alongside SI units:
+Table 8 of the SI Brochure lists units outside the SI that remain in wide use and gives
+their values in SI units. **mp-units** provides all of them except the logarithmic neper,
+bel, and decibel in the `non_si` namespace, grouped as the Brochure groups them:
 
 ```cpp
-namespace mp_units {
-namespace non_si {
+// snippet-template: si_excerpt
+namespace mp_units::non_si {
 
-// Time
-inline constexpr struct minute : named_unit<"min", mag<60> * second> {} minute;
+// long-standing units of time and angle
+inline constexpr struct minute : named_unit<"min", mag<60> * si::second> {} minute;
 inline constexpr struct hour : named_unit<"h", mag<60> * minute> {} hour;
-inline constexpr struct day : named_unit<"d", mag<24> * hour> {} day;
+inline constexpr struct degree : named_unit<{u8"°", "deg"}, mag_ratio<1, 180> * π * si::radian> {} degree;
+// ...
 
-// Plane angle
-inline constexpr struct degree : named_unit<"°", mag<ratio{1, 180}> * mag<pi> * radian> {} degree;
-inline constexpr struct arcminute : named_unit<"'", mag_ratio<1, 60> * degree> {} arcminute;
-inline constexpr struct arcsecond : named_unit<"\"", mag_ratio<1, 60> * arcminute> {} arcsecond;
+// historical names for decimal multiples and submultiples of SI units
+inline constexpr struct barn : named_unit<"b", mag_power<10, -28> * square(si::metre)> {} barn;
+inline constexpr struct litre : named_unit<"L", cubic(si::deci<si::metre>)> {} litre;
+// ...
 
-// Volume
-inline constexpr struct litre : named_unit<"l", cubic(decimetre)> {} litre;
+// internationally recognised units that are not decimal multiples or submultiples of SI units
+using codata::dalton;
+inline constexpr struct nautical_mile : named_unit<"nmi", mag<1852> * si::metre> {} nautical_mile;
+inline constexpr struct electronvolt : named_unit<"eV", mag_ratio<1'602'176'634, 1'000'000'000> * mag_power<10, -19> * si::joule> {} electronvolt;
+// ...
 
-// Mass
-inline constexpr struct tonne : named_unit<"t", mag<1000> * kilogram> {} tonne;
-
-// Energy
-inline constexpr struct electronvolt : named_unit<"eV", mag_ratio<1'602'176'634, 10'000'000'000> * mag_power<10, -19> * joule> {} electronvolt;
-
-// And more...
-}
-
-namespace si {
-
-// Non-SI units are accepted for use with SI
-using namespace non_si;
+// units used in specialized technical disciplines
+inline constexpr struct var : named_unit<"var", si::volt * si::ampere, kind_of<isq::reactive_power>> {} var;
 
 }
-}  // namespace mp-units
 ```
+
+The units in general use with the SI are also available in `si`, and their symbols in
+`si::unit_symbols`: `min`, `h`, `d`, `deg`, `arcmin`, `arcsec`, `a`, `ha`, `l`, `L`, `t`,
+`bar`, `au`, and `eV`. These are the same entities as in `non_si`, so both spellings can
+be mixed. `si` doesn't provide the others: the barn, the angstrom, the gal, the nautical
+mile, the knot, and the var serve particular fields, and the dalton has a measured value
+(`si::dalton` and `si::unit_symbols::Da` are deprecated).
+
+The dalton is the only one with a measured value. The Brochure takes it from the current
+CODATA adjustment, so `non_si::dalton` is the `dalton` of the current adjustment of the
+[CODATA](codata.md) system, and `codata::codata2018::dalton` names an earlier one.
 
 
 ## SI Defining Constants
@@ -265,10 +273,11 @@ Since the 2019 redefinition, the SI is defined in terms of exact values for seve
 constants. These are provided in **mp-units**:
 
 ```cpp
+// snippet-template: si_excerpt
 namespace mp_units::si::inline si2019 {
 
 inline constexpr struct hyperfine_structure_transition_frequency_of_cs :
-  named_constant<symbol_text{u8"Δν_Cs", "dv_Cs"}, mag<9'192'631'770> * hertz> {}
+  named_constant<{u8"Δν_Cs", "dv_Cs"}, mag<9'192'631'770> * hertz> {}
   hyperfine_structure_transition_frequency_of_cs;
 
 inline constexpr struct speed_of_light_in_vacuum :
@@ -288,11 +297,11 @@ inline constexpr struct boltzmann_constant :
   boltzmann_constant;
 
 inline constexpr struct avogadro_constant :
-  named_constant<symbol_text{u8"N_A", "N_A"}, mag_ratio<602'214'076, 100'000'000> * mag_power<10, 23> / mole> {}
+  named_constant<{u8"N_A", "N_A"}, mag_ratio<602'214'076, 100'000'000> * mag_power<10, 23> / mole> {}
   avogadro_constant;
 
 inline constexpr struct luminous_efficacy :
-  named_constant<symbol_text{u8"K_cd", "K_cd"}, mag<683> * lumen / watt> {}
+  named_constant<{u8"K_cd", "K_cd"}, mag<683> * lumen / watt> {}
   luminous_efficacy;
 
 }
@@ -371,12 +380,22 @@ Use these when you need only a specific slice of the SI system.
 
 - `<mp-units/systems/si/units.h>`
 
-    Provides all SI named units (base and derived) and the non-SI units accepted for
-    use with the SI (`non_si::minute`, `non_si::hour`, `non_si::litre`, …).
+    Provides all SI named units (base and derived).
     Depends on `prefixes.h` and the ISQ quantity definitions.
 
     ```cpp
     #include <mp-units/systems/si/units.h>
+    ```
+
+- `<mp-units/systems/si/non_si.h>`
+
+    Provides the non-SI units of the SI Brochure (`non_si::minute`, `non_si::litre`,
+    `non_si::dalton`, …) with their unit symbols, and the ones of them that `si`
+    provides as well (see [Non-SI Units](#non-si-units)).
+    Depends on `units.h` and on the dalton of the current CODATA adjustment.
+
+    ```cpp
+    #include <mp-units/systems/si/non_si.h>
     ```
 
 - `<mp-units/systems/si/constants.h>`
@@ -394,9 +413,10 @@ Use these when you need only a specific slice of the SI system.
 - `<mp-units/systems/si/unit_symbols_essential.h>`
 
     Opens `namespace mp_units::si::unit_symbols` and defines short-name `inline
-    constexpr` variables for every unprefixed SI unit and non-SI accepted unit
-    (`m`, `s`, `kg`, `Hz`, `Pa`, `deg_C`, `h`, …), plus the prefixed spellings that
-    are standard practice in some domain — `fm` and `nm` in physics, `ns` in
+    constexpr` variables for every unprefixed SI unit (`m`, `s`, `kg`, `Hz`, `Pa`,
+    `deg_C`, …), and includes `non_si.h` for the symbols of the non-SI units that `si`
+    provides (`h`, `min`, …). It also defines the prefixed spellings that are standard
+    practice in some domain — `fm` and `nm` in physics, `ns` in
     electronics, `hPa` in meteorology, `MPa` in materials, `kHz`…`THz` in signals,
     the `pF`…`mF` capacitor and `mΩ`…`GΩ` resistor decades, `µSv` in radiation
     protection, and so on.
@@ -455,7 +475,7 @@ Use these when you need only a specific slice of the SI system.
     #include <mp-units/systems/si/math.h>
 
     quantity angle = 30 * deg;
-    auto s = sin(angle);  // converts to radians internally
+    auto sine = si::sin(angle);  // converts to radians internally
     ```
 
 - `<mp-units/systems/si/prefix_utils.h>` *(hosted only)*
